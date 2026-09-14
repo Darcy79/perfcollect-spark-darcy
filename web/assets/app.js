@@ -1216,13 +1216,25 @@
       err: function (r) { return r.cpu ? r.cpu.error : null; } },
     { key: 'mem', label: '内存',
       get: function (r) { return r.mem ? r.mem.pss_kb : null; },
-      err: function (r) { return r.mem ? r.mem.error : null; } },
+      err: function (r) {
+        var m = r.mem;
+        if (!m) return null;                     // 该点连对象都没有 → 采样未就绪
+        if (m.error) return m.error;             // v70 起采集端带码
+        // v71：历史数据（v70 前）内存缺数不带码——pid 为 None 时必然没解析到进程，
+        // 据此推断原因，让老报告也能判读（否则只能笼统显示"未取到值"）
+        return m.pid == null ? 'no_pid' : null;
+      } },
     { key: 'net', label: '网络',
       get: function (r) {
         var n = r.net || {};
         return (n.rx_kbps != null || n.tx_kbps != null) ? 1 : null;
       },
-      err: function (r) { return r.net ? r.net.error : null; } },
+      err: function (r) {
+        var n = r.net;
+        if (!n) return null;
+        if (n.error) return n.error;
+        return n.pid == null ? 'no_pid' : null;   // v71：同上（历史数据推断）
+      } },
     { key: 'temp', label: '温度',
       get: function (r) { return r.therm ? r.therm.temp_c : null; },
       err: function (r) { return r.therm ? r.therm.error : null; } },
@@ -1236,9 +1248,9 @@
     read_fail: '读取失败',
     no_pid: '进程未知(未解析到)',
     temperature_out_of_range: '温度超量程',
-    // 兜底：没有错误码的缺数 = 采集线程本点尚无有效读数（首点/采样节奏未到，
-    // 如内存 2s 一采的节流点）——v70 起采集端已尽量带码，此项只覆盖残余情况
-    no_value: '未取到值(采样未就绪)',
+    // 兜底：没有错误码的缺数——多是采集线程本点尚无有效读数（首点/采样节奏未到，
+    // 如内存 2s 一采的节流点）；v70 之前的历史数据部分指标不记录原因，也会落在这里
+    no_value: '未取到值(无原因码)',
   };
 
   function _isValue(v) { return v != null && typeof v === 'number' && isFinite(v); }
@@ -1340,7 +1352,8 @@
         '</div>';
     }
     body += '<div class="cmpl-note">缺数 = 该采样点取不到值（多为设备/adb 链路抖动，' +
-      '或目标不在前台），曲线在此处断开是如实记录；常见原因见 指标说明.md「十」。</div></div>';
+      '或目标不在前台），曲线在此处断开是如实记录；「无原因码」多为采样未就绪或历史数据' +
+      '未记录原因（v70 前），常见原因见 指标说明.md「十」。</div></div>';
 
     var html = '<button type="button" class="cmpl-toggle" aria-expanded="false" title="点击展开/收起">' +
       '<span class="cmpl-badge ' + grade + '">' + head + '</span>' +

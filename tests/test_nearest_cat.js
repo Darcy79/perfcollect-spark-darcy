@@ -280,16 +280,30 @@ if (typeof computeCompleteness !== 'function') {
   };
   const rows = [
     { t_ms: 0, mem: { pid: null, pss_kb: null, error: 'no_pid' } },   // 进程未解析到
-    { t_ms: 1000 },                                                    // 无值且无错误码 → 采样未就绪
+    { t_ms: 1000 },                                                    // 连对象都没有 → 采样未就绪
   ];
   const c = window.PerfCharts.computeCompleteness(rows);
   window.PerfCharts.renderCompleteness('cmpj', c);
   const html = els['cmpj'].innerHTML;
   eq(html.indexOf('进程未知(未解析到)') >= 0, true, '文案：no_pid → 「进程未知(未解析到)」');
-  eq(html.indexOf('未取到值(采样未就绪)') >= 0, true, '文案：无错误码 → 「未取到值(采样未就绪)」');
+  eq(html.indexOf('未取到值(无原因码)') >= 0, true, '文案：无错误码 → 「未取到值(无原因码)」');
   eq(html.indexOf('该指标无值') >= 0, false, '文案：不再出现含糊的「该指标无值」');
   eq(html.indexOf('cmpl-toggle') >= 0, true, '结构：输出可折叠的标题行按钮');
   eq(html.indexOf('cmpl-body') >= 0, true, '结构：输出可折叠的内容区');
+
+  // v71：历史数据（v70 前）内存/网络缺数不带码，但 pid=None 可推断为"进程未知"
+  const legacy = [
+    { t_ms: 0, mem: { pid: null, pss_kb: null, vmrss_kb: null },   // 老格式：无 error 字段
+      net: { pid: null, rx_kbps: null, tx_kbps: null } },
+    { t_ms: 1000, mem: { pid: 13694, pss_kb: 900000 }, net: { pid: 13694, rx_kbps: 1 } },
+  ];
+  const c2 = window.PerfCharts.computeCompleteness(legacy);
+  eq(c2.metrics.mem.reasons.no_pid, 1, '历史数据：内存 pid=None → 推断为进程未知');
+  eq(c2.metrics.net.reasons.no_pid, 1, '历史数据：网络 pid=None → 推断为进程未知');
+  // 有 pid 但无值（异常形态）→ 不推断为进程未知，仍归"无原因码"
+  const odd = [{ t_ms: 0, mem: { pid: 13694, pss_kb: null } }];
+  eq(window.PerfCharts.computeCompleteness(odd).metrics.mem.reasons.no_value, 1,
+     '有 pid 无值 → 不误推断为进程未知');
 }
 
 if (failures.length) {
