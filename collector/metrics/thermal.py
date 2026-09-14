@@ -105,4 +105,7 @@ class ThermalCollector:
             result["voltage_v"] = round(vol / 1e6, 2)
         if cur is not None and vol is not None:
             result["power_w"] = round(abs(cur) * vol / 1e12, 3)
+        # v70：温度完全读不到时带错误码（此前静默空值 → 报告里只能兜底显示"该指标无值"）
+        if result["temp_c"] is None and "error" not in result:
+            result["error"] = "read_fail"
         return result

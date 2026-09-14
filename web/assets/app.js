@@ -1215,14 +1215,17 @@
       get: function (r) { return r.cpu ? r.cpu.cpu_proc_pct : null; },
       err: function (r) { return r.cpu ? r.cpu.error : null; } },
     { key: 'mem', label: '内存',
-      get: function (r) { return r.mem ? r.mem.pss_kb : null; } },
+      get: function (r) { return r.mem ? r.mem.pss_kb : null; },
+      err: function (r) { return r.mem ? r.mem.error : null; } },
     { key: 'net', label: '网络',
       get: function (r) {
         var n = r.net || {};
         return (n.rx_kbps != null || n.tx_kbps != null) ? 1 : null;
-      } },
+      },
+      err: function (r) { return r.net ? r.net.error : null; } },
     { key: 'temp', label: '温度',
-      get: function (r) { return r.therm ? r.therm.temp_c : null; } },
+      get: function (r) { return r.therm ? r.therm.temp_c : null; },
+      err: function (r) { return r.therm ? r.therm.error : null; } },
   ];
 
   // 缺数原因码 → 人话（与采集端错误码一一对应，见 指标说明.md「一、1」「十」）
@@ -1231,8 +1234,11 @@
     no_layer: '无渲染层(不在前台)',
     layer_read_fail: '渲染层失效',
     read_fail: '读取失败',
-    no_pid: '进程未知',
-    no_value: '该指标无值',
+    no_pid: '进程未知(未解析到)',
+    temperature_out_of_range: '温度超量程',
+    // 兜底：没有错误码的缺数 = 采集线程本点尚无有效读数（首点/采样节奏未到，
+    // 如内存 2s 一采的节流点）——v70 起采集端已尽量带码，此项只覆盖残余情况
+    no_value: '未取到值(采样未就绪)',
   };
 
   function _isValue(v) { return v != null && typeof v === 'number' && isFinite(v); }

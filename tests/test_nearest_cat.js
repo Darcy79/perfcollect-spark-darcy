@@ -262,6 +262,36 @@ if (typeof computeCompleteness !== 'function') {
   eq(g(20.1), 'bad', 'completenessGrade：>20% 红');
 }
 
+// ---------------- renderCompleteness 文案映射（v70：缺数原因要说人话） ----------------
+{
+  // 最小 DOM stub：renderCompleteness 只用到 innerHTML/style/querySelector/classList
+  const els = {};
+  globalThis.document = {
+    getElementById: function (id) {
+      if (!els[id]) {
+        els[id] = {
+          innerHTML: '', style: {},
+          querySelector: function () { return { setAttribute: function () {}, addEventListener: function () {} }; },
+          classList: { toggle: function () { return true; } },
+        };
+      }
+      return els[id];
+    },
+  };
+  const rows = [
+    { t_ms: 0, mem: { pid: null, pss_kb: null, error: 'no_pid' } },   // 进程未解析到
+    { t_ms: 1000 },                                                    // 无值且无错误码 → 采样未就绪
+  ];
+  const c = window.PerfCharts.computeCompleteness(rows);
+  window.PerfCharts.renderCompleteness('cmpj', c);
+  const html = els['cmpj'].innerHTML;
+  eq(html.indexOf('进程未知(未解析到)') >= 0, true, '文案：no_pid → 「进程未知(未解析到)」');
+  eq(html.indexOf('未取到值(采样未就绪)') >= 0, true, '文案：无错误码 → 「未取到值(采样未就绪)」');
+  eq(html.indexOf('该指标无值') >= 0, false, '文案：不再出现含糊的「该指标无值」');
+  eq(html.indexOf('cmpl-toggle') >= 0, true, '结构：输出可折叠的标题行按钮');
+  eq(html.indexOf('cmpl-body') >= 0, true, '结构：输出可折叠的内容区');
+}
+
 if (failures.length) {
   console.error(`[x] 断言失败 ${failures.length} 条（通过 ${passed}）：`);
   failures.forEach((f) => console.error('    - ' + f));

@@ -6,12 +6,12 @@
 
 ---
 
-## 当前状态（2026-09-11，v69）
+## 当前状态（2026-09-11，v70）
 
 | 项 | 值 |
 |---|---|
-| 前端资源版本 | **v63**（`web/index.html` + `web/report.html` 各 3 处 `?v=`） |
-| 测试 | Python **156** 条 + JS **86** 断言（全绿） |
+| 前端资源版本 | **v64**（`web/index.html` + `web/report.html` 各 3 处 `?v=`） |
+| 测试 | Python **168** 条 + JS **91** 断言（全绿） |
 | 采集环境 | Windows + adb 真机（荣耀 ADT-AN00 Magic3 Pro / OPPO；详见 `devices.md`） |
 | 工具链 | `uv`（Python）+ `bun`（JS 测试）+ `adb`；路径见 `AGENTS.md` §4 |
 
@@ -22,6 +22,37 @@
 - 待真机确认：开小游戏时 appbrand 进程的 `comm`/`cmdline` 实测值；OPPO 及其他品牌 `comm` 截断方向（首 15 / 末 15）；微信多开时 appbrand1/2 能否区分
 
 ---
+
+## v70（2026-09-11 · 主会话）—— 补全缺数原因码：不再出现含糊的「该指标无值」
+
+- **触发**：用户问"该指标无值 2 / 该指标无值 1 是什么意思"。核查发现这是**信息缺口**而非
+  正常分类：`mem.py` / `network.py` / `thermal.py` 在「进程未解析到」「读取失败」时**只返回
+  空值、不写 `error` 字段**（只有 `cpu.py` / `fps.py` 写了），前端只能兜底显示「该指标无值」——
+  run `20260911_162353` 里内存 41 个缺数点、网络 41、温度 40 **全部**落在该兜底分类，
+  看不出是链路问题还是进程问题
+- **改动**：`collector/metrics/mem.py`（pid 为 None → `error: "no_pid"`；dumpsys 抛异常或
+  拿到输出但两个兜底都解析不出 PSS → `error: "read_fail"`；**节流点不带码**）；
+  `collector/metrics/network.py`（pid 缺失 → `no_pid`；`/proc/<pid>/net/dev` 读取失败 →
+  `read_fail`；首点无基准仍不带码）；`collector/metrics/thermal.py`（温度完全读不到 →
+  `read_fail`；超量程仍报自己的 `temperature_out_of_range`）；
+  `web/assets/app.js`（`COMPLETENESS_METRICS` 给 内存/网络/温度 补 `err` 取值函数——否则
+  采集端补了码前端也不读；文案改为 `no_pid`→「进程未知(未解析到)」、`no_value`→
+  「未取到值(采样未就绪)」、新增 `temperature_out_of_range`→「温度超量程」）；
+  `web/index.html` + `web/report.html`（资源版本 v63 → **v64**）；
+  `tests/test_metric_error_codes.py` 新建（12 用例）、`tests/test_nearest_cat.js`（+5 断言）
+- **影响面**：**新采集**的缺数点原因可直接判读；**历史数据不变**（那批 `no_value` 仍是
+  兜底分类，无法追溯）；`main.py` 的断连/缺数告警（`channel_alert`）现在会把内存/网络/温度
+  的缺数一并计入 `err_count`——**告警更灵敏也更准确**（此前这三个指标的缺数完全不计入），
+  阈值仍是「3 个指标带 error 记 missing、≥4 记 disconnect」且状态沿去重，不会刷屏
+- **验证**：① Python 测试 156 → **168 全绿**（新增：失败必带码、正常路径不带码、节流点不带码、
+  首点不带码、超量程保留自己的码）；② JS 断言 86 → **91 全绿**（含文案映射：不再出现
+  「该指标无值」）；③ **离线端到端**：合成一份"新格式"数据（各指标带 `probe_fail`/
+  `no_pid`/`read_fail`）→ 导出报告 → Edge headless 渲染，卡片文本实测：
+  `内存 4/10（40.0%）进程未知(未解析到) 3 · 未取到值(采样未就绪) 1`、
+  `温度 2/10（20.0%）未取到值(采样未就绪) 1 · 读取失败 1`、`FPS … 链路读取失败 3 ·
+  无渲染层(不在前台) 2`，`channel_alert` 事件行未污染采样点；④ **真机抽检未完成**：
+  执行时设备已从 `adb devices` 消失（`USB Composite Device` 在但无 ADB 接口），采集器如实
+  报「未检测到已连接的设备」，故本轮只做离线验证，待设备恢复后按长测流程补测
 
 ## v69（2026-09-11 · 主会话）—— 「数据完整度」改为可折叠卡片（默认收起一行 + 展开/收起动效）
 

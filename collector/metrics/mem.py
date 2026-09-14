@@ -106,11 +106,17 @@ class MemCollector:
         #    <package> 对多进程应用返回全部进程合计（微信可差一个量级），曲线上
         #    表现为假突跳（2026-09-11 修复）。宁可缺数，不采错数。
         if not pid:
+            # v70：带上错误码（与 cpu.py 一致）——此前只返回空值，报告里被兜底归为
+            # "该指标无值"，看不出是"进程没解析到"（run 20260911_162353 的 32 个
+            # pid=None 点全被归到无值，用户无法判读）。有码才能区分原因。
+            result["error"] = "no_pid"
             return result
         target = str(pid)
         try:
             out = self.adb.shell(["dumpsys", "meminfo", target])
         except Exception:
+            # v70：读取失败带码（此前空值无码 → 报告里只能显示"该指标无值"）
+            result["error"] = "read_fail"
             return result
         d = parse_meminfo(out)
         if d.get("pss_kb") is not None:
@@ -131,6 +137,9 @@ class MemCollector:
                     result["vmrss_kb"] = int(mr.group(1))
             except Exception:
                 pass
+        # v70：拿到输出但两个兜底都没解析出 PSS → 视为读取失败（此前静默空值）
+        if result["pss_kb"] is None:
+            result["error"] = "read_fail"
         # v64：swap PSS 一并落盘，供 data_health 的 rss_lt_pss 规则区分"换出导致的
         # PSS>RSS（正常）"与"双源解析错位（异常）"
         result["swap_pss_kb"] = d.get("swap_pss_kb")

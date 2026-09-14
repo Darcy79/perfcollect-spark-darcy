@@ -45,9 +45,13 @@ class NetworkCollector:
         pid = self.pid_resolver.current_pid(ts)
         result = {"pid": pid, "rx_kbps": None, "tx_kbps": None}
         if not pid:
+            # v70：带错误码（与 cpu.py/mem.py 一致）——此前静默空值，报告里只能兜底
+            # 显示"该指标无值"，看不出是进程未解析到
+            result["error"] = "no_pid"
             return result
         cur = self._read(pid)
         if cur is None:
+            result["error"] = "read_fail"    # v70：/proc/<pid>/net/dev 读取失败
             return result
         if self._last is not None:
             last_ts, last_rx, last_tx = self._last
