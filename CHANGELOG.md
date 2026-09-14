@@ -6,12 +6,12 @@
 
 ---
 
-## 当前状态（2026-09-11，v66）
+## 当前状态（2026-09-11，v67）
 
 | 项 | 值 |
 |---|---|
-| 前端资源版本 | **v60**（`web/index.html` + `web/report.html` 各 3 处 `?v=`） |
-| 测试 | Python **156** 条 + JS **59** 断言（全绿） |
+| 前端资源版本 | **v61**（`web/index.html` + `web/report.html` 各 3 处 `?v=`） |
+| 测试 | Python **156** 条 + JS **86** 断言（全绿） |
 | 采集环境 | Windows + adb 真机（荣耀 ADT-AN00 Magic3 Pro / OPPO；详见 `devices.md`） |
 | 工具链 | `uv`（Python）+ `bun`（JS 测试）+ `adb`；路径见 `AGENTS.md` §4 |
 
@@ -22,6 +22,29 @@
 - 待真机确认：开小游戏时 appbrand 进程的 `comm`/`cmdline` 实测值；OPPO 及其他品牌 `comm` 截断方向（首 15 / 末 15）；微信多开时 appbrand1/2 能否区分
 
 ---
+
+## v67（2026-09-11 · 主会话）—— 报告页「数据完整度」（缺数率 / 缺数原因 / 缺数区间）
+
+- **改动**：`web/assets/app.js`（新增 `computeCompleteness()` 逐指标统计缺数点数、缺数率、
+  错误码分布与**连续缺数区间**；`renderCompleteness()` 渲染顶部完整度卡片（分级：≤5% 绿 /
+  ≤20% 黄 / >20% 红）；`markCompleteness()` 在 FPS 图用灰带标出缺数区间（端点经 `nearestCat`
+  吸附到合法类目，无缺数时清空避免跨报告残留）；`updateStats()` 的 FPS 统计栏追加缺数构成
+  注记，`probe_fail`→「链路读取失败」与 `no_layer`→「无渲染层(不在前台)」分开呈现）；
+  `web/assets/style.css`（`.completeness` / `.cmp-*` 样式）；`web/report.html`（新增
+  `#report-completeness` 容器 + 调用 + hint-card 补"曲线断开"说明）；`collector/export_report.py`
+  （**自包含报告**模板同步加容器与调用——它内联同一份 `app.js`，因此导出的可分享报告同样带
+  完整度卡片）；`web/index.html`（资源版本）；`tests/test_nearest_cat.js`（+27 断言，59 → **86**）
+- **为什么**：v66 让采集端能如实区分「读失败」与「真没有层」并落盘 `channel_alert`，但**报告页
+  仍只显示一条空白曲线**——用户看不出缺了多少点、为什么缺、缺在哪一段（run `20260911_162353`
+  就是这样：62 个采样点里 52 点无 FPS，只能靠人工反查设备日志才定位到 adb 链路抖动）
+- **影响面**：仅展示层，**数据结构与导出字段不变**；完整度卡片**只在有缺数时显示**（正常报告
+  不新增噪声）；**前端资源版本 v60 → v61**（浏览器需强刷一次）
+- **验证**：① JS 断言 59 → **86** 全绿；② 用**真实事故数据**（run `20260911_162353`）跑
+  `computeCompleteness`：FPS 缺 52/62（83.9%，`no_layer` 51）、CPU 缺 42/62（`no_pid` 31 /
+  `read_fail` 9）、FPS 缺数区间 `0.0s · 2.0~5.0s · 9.0~55.1s` —— 与主会话独立侦查结论**完全一致**；
+  ③ fake-DOM 渲染断言 8/8（标题/分级/原因人话/区间文字/正常数据自动隐藏/probe_fail 新语义）；
+  ④ 三份真实 run（含 162353 事故数据与 140605 正常数据）经 `export_report.export_html` 重新导出
+  均成功且含完整度容器与调用；⑤ Python 156 测试回归全绿
 
 ## v66（2026-09-11 · 智谱GLM5.3flash 编码 + 主会话核实）
 
@@ -50,8 +73,8 @@
   cpu.pid=None=0`，首点 `t_ms=1000.8` 即含 FPS；③ 主会话独立降级验证（stub `--list` 抛异常）：
   连续 6 点均为 `probe_fail`、通道保持 `sf` 且零 `gfxinfo` 调用、含 `channel_alert` 的 jsonl
   导出正常且事件行不进入内联数据
-- **未决**：`channel_alert` 的真机端到端形态未实测（60s 正常运行零故障）；报告页对
-  `probe_fail` / `no_layer` 的差异化标注与「缺数率」展示待做（web 域，主会话）
+- **未决**：`channel_alert` 的真机端到端形态未实测（60s 正常运行零故障）；报告页的
+  `probe_fail` / `no_layer` 差异化标注与「缺数率」展示已由 **v67** 补上（web 域）
 
 ## v65（2026-09-11 · 主会话）
 

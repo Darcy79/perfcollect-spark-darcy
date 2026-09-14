@@ -189,6 +189,79 @@ if (typeof deviceInfoLines !== 'function') {
      'formatDeviceInfo：基于 lines 重组为一行');
 }
 
+// ---------------- computeCompleteness（v61：数据完整度/缺数率/缺数区间） ----------------
+const computeCompleteness = window.PerfCharts && window.PerfCharts.computeCompleteness;
+if (typeof computeCompleteness !== 'function') {
+  console.error('[x] app.js 未导出 window.PerfCharts.computeCompleteness');
+  process.exit(1);
+}
+{
+  // 空输入
+  const c0 = computeCompleteness([]);
+  eq(c0.total, 0, 'computeCompleteness：空输入 total=0');
+  eq(c0.worst, null, 'computeCompleteness：空输入无最差指标');
+  eq(c0.metrics.fps.missing, 0, 'computeCompleteness：空输入缺数 0');
+}
+{
+  // 事故形态（run 20260911_162353 抽象）：6 点里 FPS 只有 2 点有值
+  const rows = [
+    { t_ms: 0,    fps: { fps: 59.8, frame_p50_ms: 16.7 }, mem: { pss_kb: 100 }, therm: { temp_c: 30 } },
+    { t_ms: 1000, fps: { fps: null, error: 'probe_fail' } },
+    { t_ms: 2000, fps: { fps: null, error: 'probe_fail' } },
+    { t_ms: 3000, fps: { fps: null, error: 'no_layer' } },
+    { t_ms: 4000, fps: { fps: 59.9, frame_p50_ms: 16.8 } },
+    { t_ms: 5000, fps: { fps: 59.8, frame_p50_ms: 16.7 } },
+  ];
+  const c = computeCompleteness(rows);
+  eq(c.total, 6, 'computeCompleteness：总点数');
+  eq(c.metrics.fps.missing, 3, 'computeCompleteness：FPS 缺数 3');
+  eq(c.metrics.fps.pct, 50, 'computeCompleteness：FPS 缺数率 50%');
+  eq(c.metrics.fps.reasons.probe_fail, 2, 'computeCompleteness：区分 probe_fail');
+  eq(c.metrics.fps.reasons.no_layer, 1, 'computeCompleteness：区分 no_layer');
+  eq(c.metrics.fps.gaps.length, 1, 'computeCompleteness：连续缺数合并为 1 段');
+  eq(c.metrics.fps.gaps[0].from, 1, 'computeCompleteness：缺数段起点 1.0s');
+  eq(c.metrics.fps.gaps[0].to, 3, 'computeCompleteness：缺数段终点 3.0s');
+  eq(c.metrics.fps.gaps[0].n, 3, 'computeCompleteness：缺数段含 3 点');
+  eq(c.metrics.mem.missing, 5, 'computeCompleteness：mem 缺数 5（仅首点有值）');
+  eq(c.metrics.mem.reasons.no_value, 5, 'computeCompleteness：无错误码归为 no_value');
+  eq(c.metrics.temp.missing, 5, 'computeCompleteness：温度同理');
+  eq(c.worst, 'cpu', 'computeCompleteness：最差指标取缺数率最高（cpu 字段全缺=100%）');
+}
+{
+  // 全有值 → 无缺数（报告顶部不显示卡片）
+  const rows = [
+    { t_ms: 0, fps: { fps: 60, frame_p50_ms: 16.7 }, cpu: { cpu_proc_pct: 10 }, mem: { pss_kb: 1 },
+      net: { rx_kbps: 1, tx_kbps: 1 }, therm: { temp_c: 30 } },
+    { t_ms: 1000, fps: { fps: 60, frame_p50_ms: 16.7 }, cpu: { cpu_proc_pct: 10 }, mem: { pss_kb: 1 },
+      net: { rx_kbps: 1, tx_kbps: 1 }, therm: { temp_c: 30 } },
+  ];
+  const c = computeCompleteness(rows);
+  eq(c.metrics.fps.missing, 0, 'computeCompleteness：完整数据缺数 0');
+  eq(c.metrics.fps.gaps.length, 0, 'computeCompleteness：完整数据无缺数段');
+  eq(c.worst_pct, 0, 'computeCompleteness：完整数据 worst_pct=0');
+}
+{
+  // 首尾缺数（开区间）与网络"任一方向有值即算有值"
+  const rows = [
+    { t_ms: 0, net: { rx_kbps: null, tx_kbps: null } },
+    { t_ms: 1000, net: { rx_kbps: 5, tx_kbps: null } },
+    { t_ms: 2000, net: {} },
+  ];
+  const c = computeCompleteness(rows);
+  eq(c.metrics.net.missing, 2, 'computeCompleteness：网络缺数 2（任一方向有值即有值）');
+  eq(c.metrics.net.gaps.length, 2, 'computeCompleteness：首尾各 1 段缺数');
+  eq(c.metrics.net.gaps[0].from, 0, 'computeCompleteness：首段起点 0s');
+  eq(c.metrics.net.gaps[1].from, 2, 'computeCompleteness：尾段起点 2s');
+}
+{
+  // 分级阈值（>5% 黄、>20% 红）
+  const g = window.PerfCharts.completenessGrade;
+  eq(g(0), 'ok', 'completenessGrade：0% 绿');
+  eq(g(5), 'ok', 'completenessGrade：5% 仍绿');
+  eq(g(20), 'warn', 'completenessGrade：20% 黄');
+  eq(g(20.1), 'bad', 'completenessGrade：>20% 红');
+}
+
 if (failures.length) {
   console.error(`[x] 断言失败 ${failures.length} 条（通过 ${passed}）：`);
   failures.forEach((f) => console.error('    - ' + f));

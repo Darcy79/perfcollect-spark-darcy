@@ -226,6 +226,7 @@ def export_html(rows, out_path, events=None):
 </header>
 <main>
   <div class="summary" id="report-summary"></div>
+  <div class="completeness" id="report-completeness" style="display:none"></div>
   {health_banner}
   <section class="chart-card"><div class="chart-head"><h2>FPS / Jank</h2><div id="stat-fps" class="stat-line"></div></div><div id="chart-fps" class="chart"></div></section>
   <section class="chart-card"><div class="chart-head"><h2>帧时间 (ms)</h2><div id="stat-frametime" class="stat-line"></div></div><div id="chart-frametime" class="chart"></div></section>
@@ -252,6 +253,9 @@ def export_html(rows, out_path, events=None):
   window.PerfCharts.renderAll(charts, ROWS, {{ zoom: true }});
   window.PerfCharts.updateStats(charts, ROWS);
   window.PerfCharts.renderSummary('report-summary', window.PerfCharts.computeStats(ROWS));
+  var COMP = window.PerfCharts.computeCompleteness(ROWS);
+  window.PerfCharts.renderCompleteness('report-completeness', COMP);
+  window.PerfCharts.markCompleteness(charts, ROWS, COMP, 'fps');
   window.PerfCharts.initSortable('main');
   window.PerfCharts.setPinData(ROWS);
   window.PerfCharts.enableClickPin('main');

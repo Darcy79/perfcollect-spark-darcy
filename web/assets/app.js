@@ -1091,7 +1091,9 @@
   // ---------------- 统计栏 ----------------
   function updateStats(charts, rows) {
     function put(id, text) { var el = document.getElementById(id); if (el) el.textContent = text; }
-    put('stat-fps', 'FPS ' + statText(series(rows, function (r) { return r.fps ? r.fps.fps : null; }), ''));
+    // v61：FPS 统计栏附带缺数构成——区分"链路读取失败(probe_fail)"与"无渲染层(no_layer)"，
+    // 避免只看到一条空白曲线却不知道缺了多少点、为什么缺（2026-09-11 事故复盘）
+    put('stat-fps', 'FPS ' + statText(series(rows, function (r) { return r.fps ? r.fps.fps : null; }), '') + fpsMissingNote(rows));
     put('stat-frametime', '帧时间P95 ' + statText(series(rows, function (r) { return r.fps ? r.fps.frame_p95_ms : null; }), 'ms', 1));
     put('stat-cpu', '进程CPU ' + statText(series(rows, function (r) { return r.cpu ? r.cpu.cpu_proc_pct : null; }), '%'));
     put('stat-mem', 'PSS ' + statText(series(rows, function (r) { return r.mem && r.mem.pss_kb != null ? r.mem.pss_kb / 1024 : null; }), ' MB'));
@@ -1198,6 +1200,164 @@
     // （report.html selectRun 内拼入 meta-primary），汇总卡区不再显示，避免换行难看。
   }
 
+  // ---------------- 数据完整度：缺数率 / 缺数原因 / 缺数区间（v61，2026-09-11 事故复盘） ----------------
+  // 背景：run 20260911_162353 因主机 adb 通道瞬时失败，63 个采样点里 51 点取不到 FPS，
+  // 而报告只呈现"曲线空白"——看不出缺了多少、为什么缺、缺在哪一段，只能人工反查设备日志。
+  // 这里逐指标统计无值点（错误码分布 = 缺数原因）与连续缺数区间，报告顶部明示；
+  // computeCompleteness 为纯函数，导出供 tests/test_nearest_cat.js 断言。
+  var COMPLETENESS_METRICS = [
+    { key: 'fps', label: 'FPS',
+      get: function (r) { return r.fps ? r.fps.fps : null; },
+      err: function (r) { return r.fps ? r.fps.error : null; } },
+    { key: 'frametime', label: '帧时间',
+      get: function (r) { return r.fps ? r.fps.frame_p50_ms : null; } },
+    { key: 'cpu', label: 'CPU',
+      get: function (r) { return r.cpu ? r.cpu.cpu_proc_pct : null; },
+      err: function (r) { return r.cpu ? r.cpu.error : null; } },
+    { key: 'mem', label: '内存',
+      get: function (r) { return r.mem ? r.mem.pss_kb : null; } },
+    { key: 'net', label: '网络',
+      get: function (r) {
+        var n = r.net || {};
+        return (n.rx_kbps != null || n.tx_kbps != null) ? 1 : null;
+      } },
+    { key: 'temp', label: '温度',
+      get: function (r) { return r.therm ? r.therm.temp_c : null; } },
+  ];
+
+  // 缺数原因码 → 人话（与采集端错误码一一对应，见 指标说明.md「一、1」「十」）
+  var COMPLETENESS_REASONS = {
+    probe_fail: '链路读取失败',
+    no_layer: '无渲染层(不在前台)',
+    layer_read_fail: '渲染层失效',
+    read_fail: '读取失败',
+    no_pid: '进程未知',
+    no_value: '该指标无值',
+  };
+
+  function _isValue(v) { return v != null && typeof v === 'number' && isFinite(v); }
+
+  function _reasonText(code) { return COMPLETENESS_REASONS[code] || code; }
+
+  function _reasonTexts(reasons) {
+    var parts = [];
+    Object.keys(reasons || {}).sort(function (a, b) { return reasons[b] - reasons[a]; })
+      .forEach(function (c) { parts.push(_reasonText(c) + ' ' + reasons[c]); });
+    return parts.join(' · ');
+  }
+
+  // 计算各指标缺数点数/缺数率/原因分布/连续缺数区间（时间单位秒，1 位小数）
+  function computeCompleteness(rows) {
+    rows = rows || [];
+    var total = rows.length;
+    var out = { total: total, metrics: {}, worst: null, worst_pct: 0 };
+    COMPLETENESS_METRICS.forEach(function (m) {
+      var missing = 0, reasons = {}, gaps = [], run = null;
+      rows.forEach(function (r) {
+        if (_isValue(m.get(r))) {
+          if (run) { gaps.push(run); run = null; }
+          return;
+        }
+        missing++;
+        var code = (m.err && m.err(r)) || 'no_value';
+        reasons[code] = (reasons[code] || 0) + 1;
+        var t = Math.round((r.t_ms || 0) / 100) / 10;
+        if (run) { run.to = t; run.n++; } else { run = { from: t, to: t, n: 1 }; }
+      });
+      if (run) gaps.push(run);
+      var pct = total ? (missing / total * 100) : 0;
+      out.metrics[m.key] = { key: m.key, label: m.label, total: total, missing: missing,
+                             pct: pct, reasons: reasons, gaps: gaps };
+      if (pct > out.worst_pct) { out.worst_pct = pct; out.worst = m.key; }
+    });
+    return out;
+  }
+
+  function completenessGrade(pct) {
+    if (pct <= 5) return 'ok';
+    if (pct <= 20) return 'warn';
+    return 'bad';
+  }
+
+  // FPS 统计栏注记：无缺数返回空串（正常报告不显示噪声）
+  function fpsMissingNote(rows) {
+    var missing = 0, reasons = {};
+    (rows || []).forEach(function (r) {
+      var f = r.fps || {};
+      if (_isValue(f.fps)) return;
+      missing++;
+      var c = f.error || 'no_value';
+      reasons[c] = (reasons[c] || 0) + 1;
+    });
+    if (!missing) return '';
+    return '  ⚠缺 ' + missing + ' 点（' + _reasonTexts(reasons) + '）';
+  }
+
+  // 渲染完整度卡片；全部指标完整时不显示（避免正常报告顶部多一块噪声）
+  function renderCompleteness(elId, comp) {
+    var el = document.getElementById(elId);
+    if (!el || !comp || !comp.total) return;
+    var worst = comp.worst ? comp.metrics[comp.worst] : null;
+    if (!worst || !worst.missing) { el.innerHTML = ''; el.style.display = 'none'; return; }
+    var grade = completenessGrade(worst.pct);
+    var head = grade === 'bad' ? '⚠️ 数据大面积缺失'
+             : grade === 'warn' ? '⚠️ 部分数据缺失' : '数据基本完整';
+    var html = '<div class="cmp-head">' +
+      '<span class="cmp-title">数据完整度</span>' +
+      '<span class="cmp-badge ' + grade + '">' + head + '</span>' +
+      '<span class="cmp-sub">最差指标 ' + worst.label + '：缺 ' + worst.missing + '/' + worst.total +
+      ' 点（' + worst.pct.toFixed(1) + '%）' +
+      (Object.keys(worst.reasons).length ? ' —— ' + _reasonTexts(worst.reasons) : '') +
+      '</span></div><div class="cmp-table">';
+    COMPLETENESS_METRICS.forEach(function (m) {
+      var c = comp.metrics[m.key];
+      if (!c) return;
+      var g = completenessGrade(c.pct);
+      html += '<div class="cmp-row"><span class="cmp-k">' + c.label + '</span>' +
+        '<span class="cmp-v ' + (c.missing ? g : 'ok') + '">' +
+        (c.missing ? (c.missing + '/' + c.total + '（' + c.pct.toFixed(1) + '%）') : '完整') +
+        '</span><span class="cmp-r">' +
+        (c.missing ? _reasonTexts(c.reasons) : '') + '</span></div>';
+    });
+    html += '</div>';
+    var gaps = worst.gaps || [];
+    if (gaps.length) {
+      var parts = gaps.slice(0, 6).map(function (g) {
+        return g.n > 1 ? (g.from.toFixed(1) + '~' + g.to.toFixed(1) + 's') : (g.from.toFixed(1) + 's');
+      });
+      html += '<div class="cmp-gaps"><span class="cmp-k">' + worst.label + ' 缺数区间</span>' +
+        '<span class="cmp-gap-list">' + parts.join(' · ') +
+        (gaps.length > 6 ? ' · …共 ' + gaps.length + ' 段' : '') + '</span></div>';
+    }
+    html += '<div class="cmp-note">缺数 = 该采样点取不到值（多为设备/adb 链路抖动，' +
+      '或目标不在前台），曲线在此处断开是如实记录；常见原因见 指标说明.md「十」。</div>';
+    el.innerHTML = html;
+    el.style.display = '';
+  }
+
+  // 在图上用灰色带标出该指标的缺数区间（直观看到"空洞在哪"）；
+  // 端点用 nearestCat 吸附到合法类目值，避免落不到类目轴上静默不渲染。
+  function markCompleteness(charts, rows, comp, key) {
+    key = key || 'fps';
+    if (!charts || !rows || !rows.length || !comp || !comp.metrics[key]) return;
+    var chart = charts[key];
+    if (!chart) return;
+    var gaps = comp.metrics[key].gaps || [];
+    var times = rows.map(function (r) { return r.t_ms; });
+    // 无缺数时也要执行（data 为空 → 清掉上一份报告残留的灰带）
+    var data = [];
+    gaps.slice(0, 40).forEach(function (g) {
+      var a = nearestCat(times, g.from * 1000), b = nearestCat(times, g.to * 1000);
+      if (a == null || b == null) return;
+      data.push([{ xAxis: a }, { xAxis: b }]);
+    });
+    try {
+      chart.setOption({ series: [{ markArea: {
+        silent: true, itemStyle: { color: 'rgba(144,164,174,0.14)' }, data: data,
+      } }] });
+    } catch (e) {}
+  }
+
   // ---------------- 事件标注层（2026-08-14 模式1：logcat console.log 叠加） ----------------
   // 把事件按 t_ms 映射到 x 轴类目值，在每张图画竖线标注；
   // 第一张图（FPS）附带文字标签，其余图只画线（避免标签 6 次重复）。
@@ -1284,6 +1444,11 @@
     updateStats: updateStats,
     computeStats: computeStats,
     renderSummary: renderSummary,
+    // v61：数据完整度（缺数率/原因/区间）+ 图上缺数灰带
+    computeCompleteness: computeCompleteness,
+    renderCompleteness: renderCompleteness,
+    markCompleteness: markCompleteness,
+    completenessGrade: completenessGrade,
     _statText: statText,
   };
 })();
