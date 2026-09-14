@@ -6,11 +6,11 @@
 
 ---
 
-## 当前状态（2026-09-11，v68）
+## 当前状态（2026-09-11，v69）
 
 | 项 | 值 |
 |---|---|
-| 前端资源版本 | **v62**（`web/index.html` + `web/report.html` 各 3 处 `?v=`） |
+| 前端资源版本 | **v63**（`web/index.html` + `web/report.html` 各 3 处 `?v=`） |
 | 测试 | Python **156** 条 + JS **86** 断言（全绿） |
 | 采集环境 | Windows + adb 真机（荣耀 ADT-AN00 Magic3 Pro / OPPO；详见 `devices.md`） |
 | 工具链 | `uv`（Python）+ `bun`（JS 测试）+ `adb`；路径见 `AGENTS.md` §4 |
@@ -22,6 +22,27 @@
 - 待真机确认：开小游戏时 appbrand 进程的 `comm`/`cmdline` 实测值；OPPO 及其他品牌 `comm` 截断方向（首 15 / 末 15）；微信多开时 appbrand1/2 能否区分
 
 ---
+
+## v69（2026-09-11 · 主会话）—— 「数据完整度」改为可折叠卡片（默认收起一行 + 展开/收起动效）
+
+- **改动**：`web/assets/app.js`（`renderCompleteness` 输出改为 `.cmpl-toggle` 标题行按钮 +
+  `.cmpl-body` 内容区两段结构：标题行 = 严重度徽标 + 一句话缩略摘要 + 旋转箭头；点击切换
+  `.cmpl-open`；**始终默认收起**，不记忆偏好——避免"展开过一次后每份报告都铺开"）；
+  `web/assets/style.css`（新增 `.cmpl-toggle`（整行可点按钮）/`.cmpl-toggle-text`（缩略超长
+  省略）/`.cmpl-arrow`（`transition: transform .35s`，展开时 `rotate(90deg)`）/
+  `.cmpl-body`（`display:grid; grid-template-rows:0fr`，展开态 `1fr`，`transition .35s ease`）/
+  `.cmpl-body-inner`（`overflow:hidden; min-height:0`）/`.cmpl-content`；容器圆角裁剪）；
+  `web/index.html` + `web/report.html`（资源版本 v62 → **v63**）
+- **为什么**：用户反馈"这个版块常驻的话有点占地方，能不能做成缩略、可展开可收起，精简显示，
+  展开和收起都加动效"
+- **影响面**：纯展示层，数据结构与导出字段不变；有缺数时卡片**常驻只占一行（41px）**，
+  点开才铺开详情（宽屏 284px / 520px 窄屏 457px）；动效用 `grid-template-rows 0fr↔1fr`
+  过渡（内容高度自适应，无需 JS 量高）；浏览器不支持该过渡时退化为瞬时展开（功能不受影响）
+- **验证**：① JS 断言 86 条全绿；② **Edge headless 三态实测**（导出报告，注入测量脚本后
+  `dump-dom`）：1600px 窗口 `收起 41px → 展开 284px（内容 243px）→ 再收起 41px`，520px 窗口
+  `41 → 457（内容 416）→ 41`，**三态所有元素零溢出**；展开态箭头 transform =
+  `matrix(0,1,-1,0,0,0)`（= rotate 90°）；收起态过渡属性实测 `grid-template-rows/0.35s`、
+  箭头 `0.35s`；③ 重新导出验证报告确认含折叠结构
 
 ## v68（2026-09-11 · 主会话）—— 修「数据完整度」卡片排版与文字截断
 

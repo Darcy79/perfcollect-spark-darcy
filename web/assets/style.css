@@ -192,22 +192,41 @@ main { flex: 1; padding: 16px 20px; display: flex; flex-direction: column; gap: 
   display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 10px; margin-bottom: 16px;
 }
-/* v62：数据完整度卡片（缺数率 / 缺数原因 / 缺数区间）——只在有缺数时显示。
+/* v69：数据完整度卡片（缺数率 / 缺数原因 / 缺数区间）——只在有缺数时显示。
    ⚠️ 类名统一用 cmpl- 前缀：`.cmp-*` 已被下方「双报告对比面板」占用
    （.cmp-head/.cmp-title/.cmp-row 等），曾因重名导致本卡片被套上对比面板的
-   4 列 grid 与行下边框、且原因文字被 nowrap+ellipsis 截断。 */
+   4 列 grid 与行下边框、且原因文字被 nowrap+ellipsis 截断。
+   本卡片可折叠：默认收起只占一行，点击标题行展开详情（grid-template-rows
+   0fr→1fr 过渡动效 + 箭头旋转）。 */
 .completeness {
-  margin: 0 0 14px; padding: 12px 14px; border-radius: 8px;
+  margin: 0 0 14px; border-radius: 8px; overflow: hidden;
   background: rgba(255, 171, 64, .07); border: 1px solid rgba(255, 171, 64, .42);
   font-size: 12px; line-height: 1.7;
 }
-.cmpl-head { margin-bottom: 6px; }
-.cmpl-title-row { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
-.cmpl-title { font-weight: 600; color: #e8f0f7; font-size: 13px; }
-.cmpl-badge { padding: 1px 7px; border-radius: 4px; font-size: 11px; white-space: nowrap; }
+/* 标题行 = 整行可点的按钮（收起/展开开关） */
+.cmpl-toggle {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 9px 12px; cursor: pointer; text-align: left;
+  background: transparent; border: 0; font: inherit; color: inherit;
+}
+.cmpl-toggle:hover { background: rgba(255, 171, 64, .06); }
+.cmpl-toggle:focus-visible { outline: 1px solid rgba(255, 171, 64, .6); outline-offset: -1px; }
+.cmpl-badge { padding: 1px 7px; border-radius: 4px; font-size: 11px; white-space: nowrap; flex: 0 0 auto; }
 .cmpl-badge.ok { background: rgba(102, 187, 106, .18); color: #81c784; }
 .cmpl-badge.warn { background: rgba(255, 171, 64, .18); color: #ffb74d; }
 .cmpl-badge.bad { background: rgba(239, 83, 80, .18); color: #ef5350; }
+/* 缩略摘要：flex 占满剩余空间，超长省略（展开后可见完整内容） */
+.cmpl-toggle-text {
+  flex: 1 1 auto; min-width: 0; color: #b0bec5;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cmpl-arrow { flex: 0 0 auto; color: #8fa3b8; font-size: 10px; transition: transform .35s ease; }
+.completeness.cmpl-open .cmpl-arrow { transform: rotate(90deg); }
+/* 展开/收起动效：grid-template-rows 0fr↔1fr 过渡（内容自身高度驱动，无需 JS 量高） */
+.cmpl-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .35s ease; }
+.completeness.cmpl-open .cmpl-body { grid-template-rows: 1fr; }
+.cmpl-body-inner { overflow: hidden; min-height: 0; }
+.cmpl-content { padding: 2px 12px 12px; }
 /* 摘要/原因/说明一律允许换行（长中文串与 probe_fail 之类长英文都不截断） */
 .cmpl-sub { color: #b0bec5; overflow-wrap: anywhere; }
 .cmpl-table { display: grid; gap: 3px; margin-top: 4px; }

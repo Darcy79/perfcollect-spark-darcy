@@ -1302,41 +1302,54 @@
     var grade = completenessGrade(worst.pct);
     var head = grade === 'bad' ? '⚠️ 数据大面积缺失'
              : grade === 'warn' ? '⚠️ 部分数据缺失' : '数据基本完整';
-    // v62：类名用 cmpl- 前缀（.cmp-* 属双报告对比面板，重名会被其样式覆盖）
-    var html = '<div class="cmpl-head">' +
-      '<div class="cmpl-title-row">' +
-      '<span class="cmpl-title">数据完整度</span>' +
-      '<span class="cmpl-badge ' + grade + '">' + head + '</span>' +
-      '</div>' +
-      '<div class="cmpl-sub">最差指标 ' + worst.label + '：缺 ' + worst.missing + '/' + worst.total +
-      ' 点（' + worst.pct.toFixed(1) + '%）' +
+    // v69：可折叠卡片——默认收起只占一行（徽标 + 一句话摘要 + 箭头），点开展开详情。
+    // 收起时 CSS 用 grid-template-rows 0fr→1fr 过渡做展开/收起动效（Chromium/Edge 支持）。
+    var summary = worst.label + ' 缺 ' + worst.missing + '/' + worst.total + ' 点（' +
+      worst.pct.toFixed(1) + '%）' +
+      (Object.keys(worst.reasons).length ? ' · ' + _reasonTexts(worst.reasons) : '');
+    var body = '';
+    body += '<div class="cmpl-content"><div class="cmpl-sub">最差指标 ' + worst.label +
+      '：缺 ' + worst.missing + '/' + worst.total + ' 点（' + worst.pct.toFixed(1) + '%）' +
       (Object.keys(worst.reasons).length ? ' —— ' + _reasonTexts(worst.reasons) : '') +
-      '</div></div><div class="cmpl-table">';
+      '</div><div class="cmpl-table">';
     COMPLETENESS_METRICS.forEach(function (m) {
       var c = comp.metrics[m.key];
       if (!c) return;
       var g = completenessGrade(c.pct);
-      html += '<div class="cmpl-row"><span class="cmpl-k">' + c.label + '</span>' +
+      body += '<div class="cmpl-row"><span class="cmpl-k">' + c.label + '</span>' +
         '<span class="cmpl-v ' + (c.missing ? g : 'ok') + '">' +
         (c.missing ? (c.missing + '/' + c.total + '（' + c.pct.toFixed(1) + '%）') : '完整') +
         '</span><span class="cmpl-r">' +
         (c.missing ? _reasonTexts(c.reasons) : '') + '</span></div>';
     });
-    html += '</div>';
+    body += '</div>';
     var gaps = worst.gaps || [];
     if (gaps.length) {
       var chips = gaps.slice(0, 6).map(function (g) {
         var txt = g.n > 1 ? (g.from.toFixed(1) + '~' + g.to.toFixed(1) + 's') : (g.from.toFixed(1) + 's');
         return '<span class="cmpl-gap">' + txt + '</span>';
       }).join('');
-      html += '<div class="cmpl-gaps"><span class="cmpl-k">' + worst.label + ' 缺数区间</span>' +
+      body += '<div class="cmpl-gaps"><span class="cmpl-k">' + worst.label + ' 缺数区间</span>' +
         chips + (gaps.length > 6 ? '<span class="cmpl-r">…共 ' + gaps.length + ' 段</span>' : '') +
         '</div>';
     }
-    html += '<div class="cmpl-note">缺数 = 该采样点取不到值（多为设备/adb 链路抖动，' +
-      '或目标不在前台），曲线在此处断开是如实记录；常见原因见 指标说明.md「十」。</div>';
+    body += '<div class="cmpl-note">缺数 = 该采样点取不到值（多为设备/adb 链路抖动，' +
+      '或目标不在前台），曲线在此处断开是如实记录；常见原因见 指标说明.md「十」。</div></div>';
+
+    var html = '<button type="button" class="cmpl-toggle" aria-expanded="false" title="点击展开/收起">' +
+      '<span class="cmpl-badge ' + grade + '">' + head + '</span>' +
+      '<span class="cmpl-toggle-text">' + summary + '</span>' +
+      '<span class="cmpl-arrow">▶</span></button>' +
+      '<div class="cmpl-body"><div class="cmpl-body-inner">' + body + '</div></div>';
     el.innerHTML = html;
     el.style.display = '';
+    // 始终默认收起（不记忆偏好）：这块只在有缺数时出现，常驻只占一行不占地方，
+    // 要看详情点一下即可——避免"展开过一次后每份报告都铺开"。
+    var btn = el.querySelector('.cmpl-toggle');
+    btn.addEventListener('click', function () {
+      var now = el.classList.toggle('cmpl-open');
+      btn.setAttribute('aria-expanded', now ? 'true' : 'false');
+    });
   }
 
   // 在图上用灰色带标出该指标的缺数区间（直观看到"空洞在哪"）；
