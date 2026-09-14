@@ -1302,34 +1302,38 @@
     var grade = completenessGrade(worst.pct);
     var head = grade === 'bad' ? '⚠️ 数据大面积缺失'
              : grade === 'warn' ? '⚠️ 部分数据缺失' : '数据基本完整';
-    var html = '<div class="cmp-head">' +
-      '<span class="cmp-title">数据完整度</span>' +
-      '<span class="cmp-badge ' + grade + '">' + head + '</span>' +
-      '<span class="cmp-sub">最差指标 ' + worst.label + '：缺 ' + worst.missing + '/' + worst.total +
+    // v62：类名用 cmpl- 前缀（.cmp-* 属双报告对比面板，重名会被其样式覆盖）
+    var html = '<div class="cmpl-head">' +
+      '<div class="cmpl-title-row">' +
+      '<span class="cmpl-title">数据完整度</span>' +
+      '<span class="cmpl-badge ' + grade + '">' + head + '</span>' +
+      '</div>' +
+      '<div class="cmpl-sub">最差指标 ' + worst.label + '：缺 ' + worst.missing + '/' + worst.total +
       ' 点（' + worst.pct.toFixed(1) + '%）' +
       (Object.keys(worst.reasons).length ? ' —— ' + _reasonTexts(worst.reasons) : '') +
-      '</span></div><div class="cmp-table">';
+      '</div></div><div class="cmpl-table">';
     COMPLETENESS_METRICS.forEach(function (m) {
       var c = comp.metrics[m.key];
       if (!c) return;
       var g = completenessGrade(c.pct);
-      html += '<div class="cmp-row"><span class="cmp-k">' + c.label + '</span>' +
-        '<span class="cmp-v ' + (c.missing ? g : 'ok') + '">' +
+      html += '<div class="cmpl-row"><span class="cmpl-k">' + c.label + '</span>' +
+        '<span class="cmpl-v ' + (c.missing ? g : 'ok') + '">' +
         (c.missing ? (c.missing + '/' + c.total + '（' + c.pct.toFixed(1) + '%）') : '完整') +
-        '</span><span class="cmp-r">' +
+        '</span><span class="cmpl-r">' +
         (c.missing ? _reasonTexts(c.reasons) : '') + '</span></div>';
     });
     html += '</div>';
     var gaps = worst.gaps || [];
     if (gaps.length) {
-      var parts = gaps.slice(0, 6).map(function (g) {
-        return g.n > 1 ? (g.from.toFixed(1) + '~' + g.to.toFixed(1) + 's') : (g.from.toFixed(1) + 's');
-      });
-      html += '<div class="cmp-gaps"><span class="cmp-k">' + worst.label + ' 缺数区间</span>' +
-        '<span class="cmp-gap-list">' + parts.join(' · ') +
-        (gaps.length > 6 ? ' · …共 ' + gaps.length + ' 段' : '') + '</span></div>';
+      var chips = gaps.slice(0, 6).map(function (g) {
+        var txt = g.n > 1 ? (g.from.toFixed(1) + '~' + g.to.toFixed(1) + 's') : (g.from.toFixed(1) + 's');
+        return '<span class="cmpl-gap">' + txt + '</span>';
+      }).join('');
+      html += '<div class="cmpl-gaps"><span class="cmpl-k">' + worst.label + ' 缺数区间</span>' +
+        chips + (gaps.length > 6 ? '<span class="cmpl-r">…共 ' + gaps.length + ' 段</span>' : '') +
+        '</div>';
     }
-    html += '<div class="cmp-note">缺数 = 该采样点取不到值（多为设备/adb 链路抖动，' +
+    html += '<div class="cmpl-note">缺数 = 该采样点取不到值（多为设备/adb 链路抖动，' +
       '或目标不在前台），曲线在此处断开是如实记录；常见原因见 指标说明.md「十」。</div>';
     el.innerHTML = html;
     el.style.display = '';

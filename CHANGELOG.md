@@ -6,11 +6,11 @@
 
 ---
 
-## 当前状态（2026-09-11，v67）
+## 当前状态（2026-09-11，v68）
 
 | 项 | 值 |
 |---|---|
-| 前端资源版本 | **v61**（`web/index.html` + `web/report.html` 各 3 处 `?v=`） |
+| 前端资源版本 | **v62**（`web/index.html` + `web/report.html` 各 3 处 `?v=`） |
 | 测试 | Python **156** 条 + JS **86** 断言（全绿） |
 | 采集环境 | Windows + adb 真机（荣耀 ADT-AN00 Magic3 Pro / OPPO；详见 `devices.md`） |
 | 工具链 | `uv`（Python）+ `bun`（JS 测试）+ `adb`；路径见 `AGENTS.md` §4 |
@@ -22,6 +22,27 @@
 - 待真机确认：开小游戏时 appbrand 进程的 `comm`/`cmdline` 实测值；OPPO 及其他品牌 `comm` 截断方向（首 15 / 末 15）；微信多开时 appbrand1/2 能否区分
 
 ---
+
+## v68（2026-09-11 · 主会话）—— 修「数据完整度」卡片排版与文字截断
+
+- **改动**：`web/assets/style.css`（完整度卡片样式**全部改用 `cmpl-` 前缀**；指标行改三列
+  grid 对齐 `标签 4.5em / 缺数率 minmax(9.5em,11em) / 原因 1fr`；摘要·原因·说明一律
+  `overflow-wrap:anywhere` 允许换行；缺数区间从一行文本改为 **chip 样式**；新增
+  `≤640px` 媒体查询：原因整行下移）；`web/assets/app.js`（`renderCompleteness` 输出结构同步
+  改类名，标题与摘要拆成两行）；`web/index.html` + `web/report.html`（资源版本 v61 → **v62**）
+- **为什么**：用户反馈"数据完整度版块的排版和显示需要优化，目前文字显示不全"。**根因是类名
+  冲突**——新卡片用了 `.cmp-head` / `.cmp-title` / `.cmp-row`，而这三个类名早已被「双报告对比
+  面板」（`style.css` 下方 `.compare-panel .cmp-*`）占用；同特异性下后定义者胜出，于是卡片被
+  套上对比面板的 **4 列 grid（1.1fr 1fr 1fr 0.7fr）+ 每行下边框 + align-items:center**，
+  而我只放了 3 个子元素 → 布局错位；再叠加 `.cmp-r` 的 `white-space:nowrap` +
+  `text-overflow:ellipsis` → **原因文字被省略号截断**（"文字显示不全"由此而来）
+- **影响面**：纯展示层，数据结构与导出字段不变；`cmpl-` 与对比面板 `cmp-` 彻底分离，两端
+  样式不再互相污染；前端资源版本 v61 → **v62**（浏览器需强刷一次）
+- **验证**：① JS 断言 86 条全绿；② **Edge headless 真实布局测量**（导出报告，1600 / 900 /
+  520px 三档窗口）：卡片内**所有元素 `scrollWidth == clientWidth`（零溢出）**，原因文本
+  （如"无渲染层(不在前台) 51 · 该指标无值 1"）完整可见；窄屏 520px 下摘要自动折成两行、
+  原因整行展示；③ 重新导出验证报告确认含 `cmpl-*`、无旧 `cmp-r` 残留；④ `grep` 确认
+  `style.css` 中 `.cmp-*` 已只属于对比面板
 
 ## v67（2026-09-11 · 主会话）—— 报告页「数据完整度」（缺数率 / 缺数原因 / 缺数区间）
 

@@ -192,30 +192,47 @@ main { flex: 1; padding: 16px 20px; display: flex; flex-direction: column; gap: 
   display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 10px; margin-bottom: 16px;
 }
-/* v61：数据完整度卡片（缺数率 / 缺数原因 / 缺数区间）——只在有缺数时显示 */
+/* v62：数据完整度卡片（缺数率 / 缺数原因 / 缺数区间）——只在有缺数时显示。
+   ⚠️ 类名统一用 cmpl- 前缀：`.cmp-*` 已被下方「双报告对比面板」占用
+   （.cmp-head/.cmp-title/.cmp-row 等），曾因重名导致本卡片被套上对比面板的
+   4 列 grid 与行下边框、且原因文字被 nowrap+ellipsis 截断。 */
 .completeness {
-  margin: 0 0 14px; padding: 10px 12px; border-radius: 8px;
+  margin: 0 0 14px; padding: 12px 14px; border-radius: 8px;
   background: rgba(255, 171, 64, .07); border: 1px solid rgba(255, 171, 64, .42);
-  font-size: 12px; line-height: 1.6;
+  font-size: 12px; line-height: 1.7;
 }
-.cmp-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin-bottom: 6px; }
-.cmp-title { font-weight: 600; color: #e8f0f7; }
-.cmp-badge { padding: 1px 7px; border-radius: 4px; font-size: 11px; white-space: nowrap; }
-.cmp-badge.ok { background: rgba(102, 187, 106, .18); color: #81c784; }
-.cmp-badge.warn { background: rgba(255, 171, 64, .18); color: #ffb74d; }
-.cmp-badge.bad { background: rgba(239, 83, 80, .18); color: #ef5350; }
-.cmp-sub { color: #b0bec5; }
-.cmp-table { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 2px 16px; }
-.cmp-row { display: flex; gap: 6px; align-items: baseline; min-width: 0; }
-.cmp-k { color: #90a4ae; flex: 0 0 auto; }
-.cmp-v { flex: 0 0 auto; color: #e8f0f7; }
-.cmp-v.ok { color: #81c784; }
-.cmp-v.warn { color: #ffb74d; }
-.cmp-v.bad { color: #ef5350; }
-.cmp-r { color: #8fa3b8; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cmp-gaps { margin-top: 6px; display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
-.cmp-gap-list { color: #cfd8dc; }
-.cmp-note { margin-top: 6px; color: #78909c; font-size: 11px; }
+.cmpl-head { margin-bottom: 6px; }
+.cmpl-title-row { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.cmpl-title { font-weight: 600; color: #e8f0f7; font-size: 13px; }
+.cmpl-badge { padding: 1px 7px; border-radius: 4px; font-size: 11px; white-space: nowrap; }
+.cmpl-badge.ok { background: rgba(102, 187, 106, .18); color: #81c784; }
+.cmpl-badge.warn { background: rgba(255, 171, 64, .18); color: #ffb74d; }
+.cmpl-badge.bad { background: rgba(239, 83, 80, .18); color: #ef5350; }
+/* 摘要/原因/说明一律允许换行（长中文串与 probe_fail 之类长英文都不截断） */
+.cmpl-sub { color: #b0bec5; overflow-wrap: anywhere; }
+.cmpl-table { display: grid; gap: 3px; margin-top: 4px; }
+.cmpl-row { display: grid; grid-template-columns: 4.5em minmax(9.5em, 11em) minmax(0, 1fr); gap: 4px 10px; align-items: baseline; }
+.cmpl-k { color: #90a4ae; }
+.cmpl-v { color: #e8f0f7; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cmpl-v.ok { color: #81c784; }
+.cmpl-v.warn { color: #ffb74d; }
+.cmpl-v.bad { color: #ef5350; }
+.cmpl-r { color: #8fa3b8; font-size: 11px; overflow-wrap: anywhere; }
+.cmpl-gaps {
+  margin-top: 8px; padding-top: 8px; border-top: 1px dashed rgba(255, 171, 64, .3);
+  display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline;
+}
+.cmpl-gap {
+  display: inline-block; padding: 1px 7px; border-radius: 4px;
+  background: rgba(144, 164, 174, .18); color: #cfd8dc; font-size: 11px;
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.cmpl-note { margin-top: 8px; color: #78909c; font-size: 11px; overflow-wrap: anywhere; }
+/* 窄屏：原因换到指标行下方整行，避免挤压截断 */
+@media (max-width: 640px) {
+  .cmpl-row { grid-template-columns: 4.5em minmax(0, 1fr); }
+  .cmpl-r { grid-column: 2 / -1; }
+}
 .summary .item {
   background: #16212c; border: 1px solid #263545; border-radius: 8px;
   padding: 10px 14px;
