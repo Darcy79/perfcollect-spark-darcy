@@ -6,12 +6,12 @@
 
 ---
 
-## 当前状态（2026-09-17，v72）
+## 当前状态（2026-09-17，v73）
 
 | 项 | 值 |
 |---|---|
-| 前端资源版本 | **v65**（`web/index.html` + `web/report.html` 各 3 处 `?v=`） |
-| 测试 | Python **168** 条 + JS **94** 断言（全绿） |
+| 前端资源版本 | **v66**（`web/index.html` + `web/report.html` 各 3 处 `?v=`） |
+| 测试 | Python **168** 条 + JS **113** 断言（全绿） |
 | 分发方式 | **zip**（`make_zip.bat` / `tools/make_zip.py` → `share/perfdog-cn-<版本>-<日期>.zip`）——**已无 exe / 安装包** |
 | 采集环境 | Windows + adb 真机（荣耀 ADT-AN00 Magic3 Pro / OPPO；详见 `devices.md`） |
 | 工具链 | `uv`（Python）+ `bun`（JS 测试）+ `adb`；路径见 `AGENTS.md` §4 |
@@ -21,9 +21,34 @@
 - 代码（非阻塞）：report.html 内联 JS 抽离、main.py 可测试化、web.py 18 端点端到端测试、apk_label 二进制解析模糊测试；前端尚未展示 `fps_clamped` / `fps_warn`（当前只在 jsonl 与 CSV/XLSX 里）
 - 待真人参与：真机矩阵（微信多开 / 分屏、高刷切换、30min+ 长测）；官方 PerfDog 对拍（**先出《口径差异白皮书》**，口径素材见 `指标说明.md`「九」）
 - 待真机确认：开小游戏时 appbrand 进程的 `comm`/`cmdline` 实测值；OPPO 及其他品牌 `comm` 截断方向（首 15 / 末 15）；微信多开时 appbrand1/2 能否区分
-- 待合入：`fix/pin-line-index` 分支的锁定蓝线索引修复（已通过 JS 113 断言 + 主会话 Edge headless 独立复现验证，待合并）
+- 待真机抽检：v73 的 pin 蓝线修复（wizard 流程已在无设备环境下用 Edge headless 复现验证，真机待设备恢复后手工确认一次）
 
 ---
+
+## v73（2026-09-17 · GPT 交付 + 主会话独立验证）—— 修正锁定蓝线「像素 ↔ 类目索引」换算
+
+- **改动**（`fix/pin-line-index` 分支，merge commit `bb755e4`）：
+  `web/assets/app.js`——新增 `GRID_PAD = { left: 56, right: 24 }` 作为 grid 边距**单一来源**
+  并让 `baseOption().grid` 引用它；新增纯函数 `pixelToIdx()` / `idxToPixel()`（grid-aware，
+  含 clamp 与退化输入保护）并挂到 `window.PerfCharts`；`_pinIndexAtLocal()` 主路径由
+  `{xAxisIndex:0}` 改为 `[{seriesIndex:0},{gridIndex:0}]`（**ECharts 5.5.0 下前者恒返回 `null`**），
+  兜底改走 `pixelToIdx()`；`_pinPlaceTip()` / `_pinPlaceLine()` 兜底改走 `idxToPixel()`；
+  finder 全失效时 `console.warn` 一次（带各 finder 返回详情，不再静默）；`convertToPixel`
+  保持 `{xAxisIndex:0}`（实测反向只有它有效，不可"统一"）；
+  `tests/test_nearest_cat.js`（+19 断言，94 → **113**）；`web/index.html` + `web/report.html`
+  （资源版本 v65 → **v66**）
+- **为什么**：用户长测报告实测——悬停白线与锁定后显示的数据时间不一致
+  （66s→118s、642s→661s、1456s→1435s，**偏差随位置变号**），且锁定后拖动时间条蓝线会自行偏移。
+  根因：像素→索引主路径从未生效（`convertFromPixel({xAxisIndex:0})` 恒返回 `null`），
+  代码长期走"**未扣除 grid 左右边距**"的兜底公式（左段索引偏大 → 数据偏晚；右段偏小 → 数据偏早）
+- **影响面**：仅报告页交互定位（锁定线 / 浮层 / 快照条显示的时刻）；采集、存储与统计口径不变
+- **验证**：① JS 断言 94 → **113** 全绿；② **主会话独立复现**（Edge headless 打开真实长测报告
+  `20260916_151858`，模拟点击 10% / 25% / 50% / 95% 处）：pin 显示时间与该像素应有类目时间的
+  偏差由修复前的 **+52 / +19 / −21** 变为 **0.0s**（仅左段 −1.0s，属取整边界）；
+  ③ `convertToPixel(xAxis)` 与 `idxToPixel()` 差 **≤0.4px**（证明线定位与数据索引同源 → 问题 2 一并消解）；
+  ④ Python **168** 测试回归全绿
+- **过程记录**：该修复由外部模型（ChatGPT）按《给ChatGPT-Pin蓝线修复任务书.md》产出；
+  主会话负责隔离到独立分支 → 跑断言 → 真实浏览器复现验证 → 合并
 
 ## v72（2026-09-17 · 主会话）—— 取消 exe / 安装包分发，统一改为 zip 分发
 
