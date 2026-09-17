@@ -108,6 +108,10 @@
   var _pinWindowVisible = true;   // 锁定点当前是否在缩放窗口内
   // 长报告降采样阈值：超过此点数的报告，显示类目/系列数据等距抽稀到该点数（统计仍全量）
   var DISP_MAX_POINTS = 3000;
+  // v66：像素 ↔ 类目索引换算必须使用与 ECharts grid 相同的左右边距。
+  // 单一来源避免 baseOption 与 pin 兜底公式分别写死后再次漂移。
+  var GRID_PAD = { left: 56, right: 24 };
+  var _probeWarned = false;   // convertFromPixel 失效告警只打印一次，避免每次点击刷屏
 
   // v43：判断容器内坐标 (x,y) 是否落在 legend（右上角"自选数据"）区域。
   //
@@ -213,22 +217,53 @@
     });
   }
 
+  // v66：像素 ↔ 类目索引的单一数学实现。ECharts 绘图区不包含 grid 左右留白，
+  // 因此不能用 px / 容器宽度直接换算，否则左段索引偏晚、右段索引偏早。
+  function pixelToIdx(px, width, n, padL, padR) {
+    n = Math.round(n) || 0;
+    if (n <= 0) return 0;
+    var usable = width - padL - padR;
+    if (!(usable > 0)) return 0;
+    var i = Math.round((px - padL) / usable * (n - 1));
+    return Math.max(0, Math.min(i, n - 1));
+  }
+
+  function idxToPixel(idx, width, n, padL, padR) {
+    n = Math.round(n) || 0;
+    if (n <= 1) return padL;
+    var usable = width - padL - padR;
+    if (!(usable > 0)) return padL;
+    return padL + idx / (n - 1) * usable;
+  }
+
   function _pinIndexAtLocal(chart, dom, x, y) {
     // x/y 为容器内坐标（v42 前用 clientX-rect.left，本质相同）
     // v58：用缓存的 _catTimes（显示类目）替代 getOption() 深拷贝
-    try {
-      var pt = chart.convertFromPixel({ xAxisIndex: 0 }, [x, y]);
-      if (pt && typeof pt[0] === 'number' && isFinite(pt[0])) {
-        var idx = Math.round(pt[0]);
-        if (_catTimes.length) return Math.max(0, Math.min(idx, _catTimes.length - 1));
-        return idx;
+    if (!_catTimes.length) return null;
+    var n = _catTimes.length;
+    // v66：ECharts 5.5.0 正向换算中 {xAxisIndex:0} 会返回 null；
+    // series/grid finder 可正确返回类目索引。反向 convertToPixel 仍保持 xAxis finder。
+    var finders = [{ seriesIndex: 0 }, { gridIndex: 0 }];
+    var probeResults = [];
+    for (var i = 0; i < finders.length; i++) {
+      try {
+        var pt = chart.convertFromPixel(finders[i], [x, y]);
+        probeResults.push(JSON.stringify(finders[i]) + ' => ' + JSON.stringify(pt));
+        if (pt && typeof pt[0] === 'number' && isFinite(pt[0])) {
+          return Math.max(0, Math.min(Math.round(pt[0]), n - 1));
+        }
+      } catch (e) {
+        probeResults.push(JSON.stringify(finders[i]) + ' => throw ' + String(e));
       }
-    } catch (e) {}
-    // 比例兜底：类目大致均匀分布
-    var r = dom.getBoundingClientRect();
-    if (!_catTimes.length || r.width <= 0) return null;
-    var idx2 = Math.round(x / r.width * _catTimes.length);
-    return Math.max(0, Math.min(idx2, _catTimes.length - 1));
+    }
+    if (!_probeWarned) {
+      _probeWarned = true;
+      console.warn('[PerfDog] convertFromPixel finder 返回无效值，改用 grid 兜底换算：' +
+                   probeResults.join('；'));
+    }
+    var w = dom.clientWidth || dom.getBoundingClientRect().width;
+    if (!(w > 0)) return null;
+    return pixelToIdx(x, w, n, GRID_PAD.left, GRID_PAD.right);
   }
 
   // v58：显示索引 → 全量索引（降采样后 _pinRows 仍为全量，快照取数需换算）
@@ -402,7 +437,8 @@
     }
     if (x === null) {
       var n = _catTimes.length || 1;   // v58：用缓存类目数，避免 getOption
-      try { x = Math.round(w * (idx + 0.5) / n); } catch (e) { x = 0; }
+      try { x = Math.round(idxToPixel(idx, w, n, GRID_PAD.left, GRID_PAD.right)); }
+      catch (e) { x = GRID_PAD.left; }
     }
     var tw = tip.offsetWidth || 150;
     var left = x + 10;
@@ -418,8 +454,9 @@
     } catch (e) {}
     if (x === null) {
       var n = _catTimes.length || 1;   // v58：用缓存类目数，避免 getOption
-      var r = chart.getDom().getBoundingClientRect();
-      x = Math.round((idx + 0.5) / n * r.width);
+      var dom = chart.getDom();
+      var w = dom.clientWidth || dom.getBoundingClientRect().width;
+      x = Math.round(idxToPixel(idx, w, n, GRID_PAD.left, GRID_PAD.right));
     }
     line.style.left = (x | 0) + 'px';
   }
@@ -853,7 +890,7 @@
       animationDurationUpdate: 0,
       // 绘图区尽量占满：left 给 Y 轴数字+单位，right 保持紧凑
       // bottom 在有时间滑动条时让出空间给 slider
-      grid: { left: 56, right: 24, top: 34, bottom: 28 },
+      grid: { left: GRID_PAD.left, right: GRID_PAD.right, top: 34, bottom: 28 },
       tooltip: { trigger: 'axis', confine: true,
         // v46：白线 tooltip 按数值降序排列（FPS 59 在 Jank 3 上面、进程% 129 在整机% 43 上面）
         order: 'valueDesc',
@@ -1470,6 +1507,8 @@
     clearTimeSliders: clearTimeSliders,
     renderEvents: renderEvents,
     nearestCat: nearestCat,   // 纯函数，导出供 tests/test_nearest_cat.js 断言
+    pixelToIdx: pixelToIdx,   // v66：grid-aware 像素 → 显示索引（纯函数，供回归测试）
+    idxToPixel: idxToPixel,   // v66：显示索引 → grid 内像素（与 pixelToIdx 同一套数学）
     setCores: setCores,       // 注入核数（实时看板 /api/status；历史报告 meta 行）
     prepareRows: prepareRows, // 清洗 event 行 + 抽取核数/设备信息（历史报告/导出 HTML 用）
     deviceInfoLines: deviceInfoLines,   // 设备信息 → 结构化行数组（历史看板分行渲染）

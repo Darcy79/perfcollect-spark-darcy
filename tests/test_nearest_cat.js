@@ -306,6 +306,35 @@ if (typeof computeCompleteness !== 'function') {
      '有 pid 无值 → 不误推断为进程未知');
 }
 
+// ---------------- Pin 蓝线像素 ↔ 索引换算（v66：扣除 ECharts grid 边距） ----------------
+{
+  const pixelToIdx = window.PerfCharts.pixelToIdx;
+  const idxToPixel = window.PerfCharts.idxToPixel;
+  eq(typeof pixelToIdx, 'function', 'pixelToIdx：已导出纯函数');
+  eq(typeof idxToPixel, 'function', 'idxToPixel：已导出纯函数');
+
+  eq(pixelToIdx(100, 1500, 1505, 56, 24), 47, 'pixelToIdx：长报告左段');
+  eq(pixelToIdx(640, 1500, 1505, 56, 24), 619, 'pixelToIdx：长报告中段');
+  eq(pixelToIdx(1430, 1500, 1505, 56, 24), 1455, 'pixelToIdx：长报告右段');
+  eq(pixelToIdx(56, 1500, 1505, 56, 24), 0, 'pixelToIdx：绘图区左边界');
+  eq(pixelToIdx(1476, 1500, 1505, 56, 24), 1504, 'pixelToIdx：绘图区右边界');
+  eq(pixelToIdx(0, 1500, 1505, 56, 24), 0, 'pixelToIdx：越界左侧 clamp');
+  eq(pixelToIdx(1500, 1500, 1505, 56, 24), 1504, 'pixelToIdx：越界右侧 clamp');
+
+  eq(Math.abs(idxToPixel(47, 1500, 1505, 56, 24) - 100.4) < 0.5, true,
+     'idxToPixel：索引 47 约为 100.4px');
+  eq(idxToPixel(0, 1500, 1505, 56, 24), 56, 'idxToPixel：首索引在左边界');
+  eq(idxToPixel(1504, 1500, 1505, 56, 24), 1476, 'idxToPixel：末索引在右边界');
+
+  [0, 47, 619, 1455, 1504].forEach((i) => {
+    eq(pixelToIdx(idxToPixel(i, 1500, 1505, 56, 24), 1500, 1505, 56, 24), i,
+       '像素索引往返一致：' + i);
+  });
+
+  eq(pixelToIdx(100, 1500, 0, 56, 24), 0, 'pixelToIdx：n=0 退化输入');
+  eq(pixelToIdx(100, 40, 10, 56, 24), 0, 'pixelToIdx：usable<=0 退化输入');
+}
+
 if (failures.length) {
   console.error(`[x] 断言失败 ${failures.length} 条（通过 ${passed}）：`);
   failures.forEach((f) => console.error('    - ' + f));
