@@ -17,7 +17,7 @@ from data_health import (check_row_health, scan_rows, health_summary, check_rows
                          WRONG_PROC_MIN_FPS, WRONG_PROC_CPU_NEAR_ZERO, WRONG_PROC_FRACTION)
 
 
-def _row(t_ms, fps=None, cpu=None, pss=None, rss=None, jank=None, p50=None):
+def _row(t_ms, fps=None, cpu=None, pss=None, rss=None, swap_pss=None, jank=None, p50=None):
     r = {"t_ms": t_ms}
     if fps is not None or jank is not None or p50 is not None:
         f = {}
@@ -36,6 +36,8 @@ def _row(t_ms, fps=None, cpu=None, pss=None, rss=None, jank=None, p50=None):
             m["pss_kb"] = pss
         if rss is not None:
             m["vmrss_kb"] = rss
+        if swap_pss is not None:
+            m["swap_pss_kb"] = swap_pss
         r["mem"] = m
     return r
 
@@ -54,6 +56,11 @@ class TestCheckRowHealth(unittest.TestCase):
 
     def test_event_row_skipped(self):
         self.assertEqual(check_row_health({"event": "meta", "cores": 8}), [])
+
+    def test_swap_pss_is_removed_before_rss_comparison(self):
+        # TOTAL PSS 10MB > RSS 9MB，但其中 2MB 已换出；有效 PSS=8MB，不应误报。
+        row = _row(0, pss=10000, rss=9000, swap_pss=2000)
+        self.assertEqual(check_row_health(row), [])
 
 
 class TestScanRowsWrongProcess(unittest.TestCase):
@@ -105,6 +112,20 @@ class TestScanRowsPssJump(unittest.TestCase):
         rows = [_row(i * 1000, pss=100000 + i * 10, rss=120000) for i in range(50)]
         issues = scan_rows(rows)
         self.assertFalse(any(it["type"] == "pss_jump" for it in issues))
+
+
+class TestScanRowsRssPss(unittest.TestCase):
+    def test_swap_pss_prevents_report_level_false_positive(self):
+        rows = [_row(i * 1000, pss=10000, rss=9000, swap_pss=2000) for i in range(10)]
+        issues = scan_rows(rows)
+        self.assertFalse(any(it["type"] == "rss_lt_pss" for it in issues))
+
+    def test_legacy_rows_without_swap_keep_original_check(self):
+        rows = [_row(i * 1000, pss=10000, rss=8000) for i in range(10)]
+        issues = scan_rows(rows)
+        rss_issues = [it for it in issues if it["type"] == "rss_lt_pss"]
+        self.assertEqual(len(rss_issues), 1)
+        self.assertEqual(rss_issues[0]["count"], 10)
 
 
 class TestScanRowsMissingMetric(unittest.TestCase):

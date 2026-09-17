@@ -48,6 +48,30 @@ def load_config(path):
         return json.load(f)
 
 
+def resolve_capture_timing(cli_interval, cli_duration, config):
+    """解析采集节奏：命令行 > config.json > 内置默认值。
+
+    config 使用对用户更直观的 interval_ms / duration_s；运行时统一换算为秒。
+    返回 (interval_s, duration_s)，非法值抛出可直接展示给用户的 ValueError。
+    """
+    config = config or {}
+    raw_interval = cli_interval if cli_interval is not None else config.get("interval_ms", 1000)
+    raw_duration = cli_duration if cli_duration is not None else config.get("duration_s", 0)
+    try:
+        interval = float(raw_interval) if cli_interval is not None else float(raw_interval) / 1000.0
+    except (TypeError, ValueError):
+        raise ValueError("采样间隔必须是数字（--interval 秒，或 config.interval_ms 毫秒）")
+    try:
+        duration = float(raw_duration)
+    except (TypeError, ValueError):
+        raise ValueError("采集时长必须是数字（--duration 或 config.duration_s，单位秒）")
+    if interval <= 0:
+        raise ValueError("采样间隔必须大于 0")
+    if duration < 0:
+        raise ValueError("采集时长不能小于 0（0 表示手动停止）")
+    return interval, duration
+
+
 # 断连/半死退避参数（v61）：连续失败 streak 达到 FAIL_ALERT_STREAK 即告警；
 # 此后主循环 sleep 按 streak 递增（上限 BACKOFF_MAX_S），避免 adb 每次 shell
 # 阻塞到 timeout（20s）时仍按 1s 节奏空转猛撞超时、把告警拖到最坏 3 分钟。
@@ -153,8 +177,10 @@ def main():
     ap.add_argument("--show-foreground", action="store_true",
                     help="仅打印当前前台应用的包名/窗口，然后退出（用于找要测的 App）")
     ap.add_argument("--serial", default="", help="ADB 设备序列号，默认自动选第一台")
-    ap.add_argument("--duration", type=float, default=0, help="采集时长(秒)，0=手动停止")
-    ap.add_argument("--interval", type=float, default=1.0, help="采样间隔(秒)")
+    ap.add_argument("--duration", type=float, default=None,
+                    help="采集时长(秒)，覆盖 config.duration_s；0=手动停止")
+    ap.add_argument("--interval", type=float, default=None,
+                    help="采样间隔(秒)，覆盖 config.interval_ms")
     ap.add_argument("--output", default="output", help="输出目录")
     ap.add_argument("--web", action="store_true", help="启动实时 Web 看板")
     ap.add_argument("--port", type=int, default=8080, help="Web 看板端口（默认 8080）")
@@ -165,6 +191,10 @@ def main():
     args = ap.parse_args()
 
     cfg = load_config(args.config)
+    try:
+        args.interval, args.duration = resolve_capture_timing(args.interval, args.duration, cfg)
+    except ValueError as e:
+        ap.error(str(e))
     package = args.package if args.package is not None else cfg.get("package", "com.tencent.mm")
     process_pattern = args.process_pattern if args.process_pattern is not None \
         else cfg.get("process_pattern", "appbrand")

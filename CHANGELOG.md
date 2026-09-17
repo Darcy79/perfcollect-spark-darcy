@@ -6,12 +6,12 @@
 
 ---
 
-## 当前状态（2026-09-17，v73）
+## 当前状态（2026-09-17，v74）
 
 | 项 | 值 |
 |---|---|
 | 前端资源版本 | **v66**（`web/index.html` + `web/report.html` 各 3 处 `?v=`） |
-| 测试 | Python **168** 条 + JS **113** 断言（全绿） |
+| 测试 | Python **178** 条 + JS **113** 断言（全绿） |
 | 分发方式 | **zip**（`make_zip.bat` / `tools/make_zip.py` → `share/perfdog-cn-<版本>-<日期>.zip`）——**已无 exe / 安装包** |
 | 采集环境 | Windows + adb 真机（荣耀 ADT-AN00 Magic3 Pro / OPPO；详见 `devices.md`） |
 | 工具链 | `uv`（Python）+ `bun`（JS 测试）+ `adb`；路径见 `AGENTS.md` §4 |
@@ -24,6 +24,22 @@
 - 待真机抽检：v73 的 pin 蓝线修复（wizard 流程已在无设备环境下用 Edge headless 复现验证，真机待设备恢复后手工确认一次）
 
 ---
+
+## v74（2026-09-17 · Codex）—— 修正内存健全性聚合与配置契约
+
+- **Swap PSS 误报修复**：`collector/data_health.py` 抽出统一的
+  `_rss_lt_pss_violation()`；实时单点和整份报告扫描均先用
+  `effective_pss = pss_kb - swap_pss_kb` 再与 RSS 比较。历史数据缺少
+  `swap_pss_kb` 时按 0 处理，保持原判读兼容。最新长测 `20260916_151858`
+  的 1505 个点重新扫描后不再产生 `rss_lt_pss` 误报。
+- **配置契约修复**：`collector/main.py` 新增 `resolve_capture_timing()`，使 README
+  已公开的 `config.json.interval_ms` / `duration_s` 真正生效；优先级为
+  命令行 > 配置文件 > 内置默认值，并拒绝非数字、非正采样间隔和负时长。
+- **测试**：`tests/test_data_health.py` 增加 Swap 单点、报告聚合、旧数据兼容 3 项；
+  新增 `tests/test_main_config.py` 7 项；Python **168 → 178**，JS **113** 全绿。
+- **影响面**：不改变采集指标算法、JSONL 格式或前端资源；无需提升 `?v=`。
+- **验证边界**：已完成单元测试和真实历史数据离线扫描；配置值的真机定时停止待
+  下次连接设备时抽检。
 
 ## v73（2026-09-17 · GPT 交付 + 主会话独立验证）—— 修正锁定蓝线「像素 ↔ 类目索引」换算
 

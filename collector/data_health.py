@@ -77,6 +77,25 @@ def _is_data_row(r):
     return isinstance(r, dict) and not r.get("event")
 
 
+def _rss_lt_pss_violation(mem):
+    """判断单点是否存在有效的 RSS<PSS 异常，统一实时与报告扫描口径。
+
+    Android TOTAL PSS 包含 Swap PSS；比较物理驻留 RSS 时必须先扣除 swap。
+    历史数据没有 swap_pss_kb 时按 0 处理，保持旧格式兼容。
+    """
+    mem = mem or {}
+    pss = mem.get("pss_kb")
+    rss = mem.get("vmrss_kb")
+    if not isinstance(pss, (int, float)) or not isinstance(rss, (int, float)):
+        return False
+    swap = mem.get("swap_pss_kb")
+    if not isinstance(swap, (int, float)):
+        swap = 0
+    effective_pss = pss - swap
+    return (effective_pss > 0 and rss < effective_pss
+            and (effective_pss - rss) > effective_pss * RSS_LT_PSS_MIN_RATIO)
+
+
 def check_row_health(row):
     """单采样点校验，返回该点的问题列表（["内存解析异常（RSS<PSS）", ...]）。
 
@@ -86,18 +105,9 @@ def check_row_health(row):
     if not _is_data_row(row):
         return issues
     m = row.get("mem") or {}
-    pss = m.get("pss_kb")
-    rss = m.get("vmrss_kb")
-    # v64：dumpsys 的 TOTAL PSS 含 swap 部分，进程被换出时 PSS 会大于 RSS（正常现象，
-    # 实测 appbrand0：PSS 231MB / RSS 211MB / SWAP PSS 141MB）。因此用"非 swap 的
-    # PSS"（pss - swap_pss）与 RSS 比较；swap 数据缺失时回退为原口径（便于老数据复检）。
-    swap = m.get("swap_pss_kb") or 0
-    eff_pss = pss - swap if (pss is not None) else None
-    if eff_pss is not None and rss is not None and eff_pss > 0:
-        # 非 swap PSS 应 ≤ RSS（共享内存 RSS 全计、PSS 按比例摊）。缺口超过 1% 才判异常，
-        # 否则是 smaps_rollup 舍入/时序噪声（实测异常样本缺口中位仅 0.41%）。
-        if rss < eff_pss and (eff_pss - rss) > eff_pss * RSS_LT_PSS_MIN_RATIO:
-            issues.append("内存解析异常（RSS<PSS）")
+    # v74：实时与报告扫描共用同一判定，避免报告忘记扣除 Swap PSS 而整段误报。
+    if _rss_lt_pss_violation(m):
+        issues.append("内存解析异常（RSS<PSS）")
     return issues
 
 
@@ -226,9 +236,9 @@ def scan_rows(rows):
         m = r.get("mem") or {}
         pss = m.get("pss_kb")
         rss = m.get("vmrss_kb")
-        if pss is not None and rss is not None:
+        if isinstance(pss, (int, float)) and isinstance(rss, (int, float)):
             n_mem += 1
-            if rss < pss and (pss - rss) > pss * RSS_LT_PSS_MIN_RATIO:
+            if _rss_lt_pss_violation(m):
                 viol += 1
     if n_mem > 0 and viol / n_mem >= 0.1:
         issues.append({
