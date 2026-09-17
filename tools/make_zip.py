@@ -23,6 +23,15 @@ import re
 import sys
 import zipfile
 
+# 输出编码自保（2026-09-17）：GitHub Actions 的 Windows runner 上 stdout 是 cp1252，
+# 直接 print 中文会抛 UnicodeEncodeError 让 CI 失败（本机 Python 默认 UTF-8 模式，看不出来）。
+# 这里显式把 stdout/stderr 重配为 UTF-8；环境不支持时忽略，不影响打包功能。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # 打进分发包的顶层目录 / 文件（相对项目根）

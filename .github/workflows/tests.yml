@@ -14,6 +14,10 @@ on:
 jobs:
   test:
     runs-on: windows-latest
+    # v73 修复：Windows runner 默认 stdout 是 cp1252，含中文的 print 会 UnicodeEncodeError
+    # （tools/make_zip.py 里已做 reconfigure 自保，这里再兜一层，覆盖所有步骤）
+    env:
+      PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
 
