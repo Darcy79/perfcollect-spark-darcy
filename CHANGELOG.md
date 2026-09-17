@@ -6,22 +6,55 @@
 
 ---
 
-## 当前状态（2026-09-11，v71）
+## 当前状态（2026-09-17，v72）
 
 | 项 | 值 |
 |---|---|
 | 前端资源版本 | **v65**（`web/index.html` + `web/report.html` 各 3 处 `?v=`） |
 | 测试 | Python **168** 条 + JS **94** 断言（全绿） |
+| 分发方式 | **zip**（`make_zip.bat` / `tools/make_zip.py` → `share/perfdog-cn-<版本>-<日期>.zip`）——**已无 exe / 安装包** |
 | 采集环境 | Windows + adb 真机（荣耀 ADT-AN00 Magic3 Pro / OPPO；详见 `devices.md`） |
 | 工具链 | `uv`（Python）+ `bun`（JS 测试）+ `adb`；路径见 `AGENTS.md` §4 |
 
 **未完成 / 待验证**
 
 - 代码（非阻塞）：report.html 内联 JS 抽离、main.py 可测试化、web.py 18 端点端到端测试、apk_label 二进制解析模糊测试；前端尚未展示 `fps_clamped` / `fps_warn`（当前只在 jsonl 与 CSV/XLSX 里）
-- 待真人参与：真机矩阵（微信多开 / 分屏、高刷切换、30min+ 长测）；官方 PerfDog 对拍（**先出《口径差异白皮书》**，口径素材见 `指标说明.md`「九」）；tag 打包验证 CI
+- 待真人参与：真机矩阵（微信多开 / 分屏、高刷切换、30min+ 长测）；官方 PerfDog 对拍（**先出《口径差异白皮书》**，口径素材见 `指标说明.md`「九」）
 - 待真机确认：开小游戏时 appbrand 进程的 `comm`/`cmdline` 实测值；OPPO 及其他品牌 `comm` 截断方向（首 15 / 末 15）；微信多开时 appbrand1/2 能否区分
+- 待合入：`fix/pin-line-index` 分支的锁定蓝线索引修复（已通过 JS 113 断言 + 主会话 Edge headless 独立复现验证，待合并）
 
 ---
+
+## v72（2026-09-17 · 主会话）—— 取消 exe / 安装包分发，统一改为 zip 分发
+
+- **改动**：
+  - **删除**全部 Windows 安装/打包链路：`perfdog.spec`（PyInstaller 配置）、`packaging/`
+    （`build_exe.ps1`、`build_installer.ps1`、`launcher.py`、`perfdog_installer.iss`，
+    以及未纳入版本库的 `installer_output/`（12 MB 安装包）与 `staging/`）、
+    `.github/workflows/build.yml`（打包 exe + 发 Release），并清理本机 `build/`、`dist/` 产物
+  - **新增** `tools/make_zip.py` + 根目录 `make_zip.bat`：生成
+    `share/perfdog-cn-<版本>-<日期>.zip`（版本号自动从本文件状态头读取；脚本内自检
+    「不含 collector/output/」）；新增 `分享说明.md`（打包后作为包内「先读我-使用说明.md」）
+  - **新增** `.github/workflows/tests.yml` 取代 `build.yml`：只跑 `py_compile` +
+    Python 单测 + JS 断言 + 打包脚本冒烟（CI 从"出安装包"变为"守代码质量"）
+  - `start_perfdog.bat` / `start_dashboard.bat`：加 `--with openpyxl`
+    （仅 XLSX 导出需要，其余功能零依赖 → zip 分发开箱可用）
+  - `.gitignore`：清理打包相关规则（`build/`、`dist/`、`*.spec`、`packaging/staging/`、
+    `packaging/installer_output/`），新增 `share/`
+  - 文档同步：`README.md`（获取章节重写为 zip + 明示取消 exe 及原因）、
+    `使用教程-保姆级.md`（"方式 A/B"重写为 zip/源码，数据路径与 FAQ 里所有 exe 引用改为源码路径）、
+    `AGENTS.md`（"打包 / CI"行 → "分发 / CI"）、`打包后操作流程与改动需求.md`（补 v72 作废说明）
+- **为什么**：用户要求「剔除项目内所有跟 Windows 安装相关的逻辑代码，以后分享都走 zip，
+  不用走 exe，避免很多问题」——打包 exe/安装包带来的 SmartScreen 拦截、杀软误报、
+  签名缺失、安装残留与卸载、构建环境依赖等问题一次性消除
+- **影响面**：**仅分发方式变化**；运行时行为完全不变（采集器 / 看板 / 报告功能与源码运行一致，
+  因为打包版本来就是 `python main.py --web` 的等价物）；采集数据与版本库隔离关系不变
+- **验证**：① 实际执行 `tools/make_zip.py` → 生成 41 文件 / 约 0.5 MB 的分发包，
+  自检输出「确认不含采集数据：OK（无 collector/output/）」；② 解压到临时目录后
+  **从包内直接运行 `python collector/main.py --help` 正常**（证明分发包自包含可用）；
+  ③ Python **168** 测试 + JS **94** 断言全绿（无功能回归）；
+  ④ 全仓库检索 `perfdog.spec` / `build.yml` / PyInstaller / Inno Setup 的代码级引用为 0
+  （仅文档中保留"已取消"的说明）
 
 ## v71（2026-09-11 · 主会话）—— 历史数据缺数原因推断（老报告也能判读）
 

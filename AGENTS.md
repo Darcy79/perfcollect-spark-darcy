@@ -79,7 +79,7 @@ FPS 与 Jank/帧时间的时间窗**故意不同**（FPS=滚动缓冲主段均�
 | 采集端 / 指标算法 | `指标说明.md`、`devices.md`、对应的 `collector/metrics/*.py` |
 | 前端看板 | `web/assets/app.js`、`web/report.html`、`指标说明.md`「九、统计口径说明」 |
 | 文档 | `架构设计.md`、`指标说明.md`、`devices.md` |
-| 打包 / CI | `.github/workflows/build.yml`、`perfdog.spec`、`README.md` |
+| 分发 / CI | `tools/make_zip.py` + `make_zip.bat`（zip 分发，**本项目已无 exe/安装包**）、`.github/workflows/tests.yml`、`README.md` |
 | 真机适配 | `devices.md`（含「五、换机验收步骤」） |
 
 ---

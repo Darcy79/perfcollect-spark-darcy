@@ -1,0 +1,48 @@
+name: Tests
+
+# v72：原 build.yml 是「打包 Windows exe + 发 Release」，已随 exe/安装包分发一起取消
+# （项目改为 zip 分发，见 tools/make_zip.py）。
+# 这里保留 CI 的价值：每次推送/PR 跑一遍语法检查 + 全部单元测试，防止回归。
+# 手动触发：Actions → Tests → Run workflow
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Syntax check (py_compile)
+        shell: pwsh
+        run: |
+          python -m py_compile `
+            collector\main.py collector\web.py collector\adb.py `
+            collector\pidresolver.py collector\probe.py collector\apk_label.py `
+            collector\logcat.py collector\export_report.py collector\dashboard.py `
+            collector\data_health.py `
+            collector\metrics\fps.py collector\metrics\cpu.py `
+            collector\metrics\mem.py collector\metrics\network.py `
+            collector\metrics\thermal.py
+
+      - name: Python unit tests
+        shell: pwsh
+        run: python -m unittest discover -s tests -p "test_*.py"
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: JS assertions (web/assets/app.js pure functions)
+        shell: pwsh
+        run: bun run tests/test_nearest_cat.js
+
+      - name: Packaging script smoke test (zip dry-run)
+        shell: pwsh
+        run: python tools/make_zip.py --out "${{ runner.temp }}\share"

@@ -22,7 +22,8 @@ echo  History     : http://localhost:8080/report.html
 echo  Stop        : close window or Ctrl+C
 echo ==================================================
 echo.
-"%UV%" run --no-project python dashboard.py
+rem --- --with openpyxl: only "export XLSX" needs it (keeps zip distribution zero-setup) ---
+"%UV%" run --no-project --with openpyxl python dashboard.py
 
 pause
 endlocal

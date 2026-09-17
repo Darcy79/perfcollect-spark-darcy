@@ -6,12 +6,12 @@
 
 ## 获取
 
-**方式 A：下载打包版（推荐，免装 Python）**
-1. 打开 GitHub Release 页：https://github.com/Darcy79/perfdog-spark-darcy/releases
-2. 下载最新版 `perfdog.exe`（GitHub Actions 自动构建的单文件，Windows 直接双击运行）
-3. exe 首次运行自动把配置模板复制到 exe 所在目录（可改 `config.json`），数据保存在 exe 旁 `output/` 下
+**方式 A：拿分发包（zip，推荐给不写代码的同事）**
+1. 向维护者要最新分发包 `perfdog-cn-<版本>-<日期>.zip`（由 `make_zip.bat` 生成）
+2. 解压到任意路径（**建议英文路径**，例如 `D:\perfdog`）→ 双击 `start_perfdog.bat`
+3. 需要 uv 或 Python（见下方「没有 Python？」）；包内 `先读我-使用说明.md` 有 3 步上手
 
-**方式 B：源码运行**
+**方式 B：源码运行（开发者）**
 ```bash
 git clone https://github.com/Darcy79/perfdog-spark-darcy.git
 cd perfdog-spark-darcy
@@ -19,15 +19,19 @@ cd perfdog-spark-darcy
 cd collector && uv run --no-project python main.py --web
 ```
 
-> 两种方式行为一致：等价 `cd collector && python main.py --web`。打包版与源码版每次 Release 同步更新（GitHub Actions 按 `perfdog.spec` 构建，推送 `v*` tag 自动出 Release）。
+> ⚠️ **本项目已取消 exe / 安装包分发（v72 起）**，统一走 zip：源码解压即用、内容可审计、
+> 不会被 SmartScreen 拦、无安装残留与卸载问题，也免去 PyInstaller / Inno Setup 的构建与签名麻烦。
+> 生成分发包：项目根目录双击 `make_zip.bat`（或 `python tools/make_zip.py`），输出在 `share/`。
+> 历史上 GitHub Actions 曾按 `perfdog.spec` 打包 exe 并发 Release，相关的 `packaging/`、`perfdog.spec`、
+> `.github/workflows/build.yml` 已全部移除；CI 现在只跑测试（`.github/workflows/tests.yml`）。
 
 ## 5 分钟上手
 
 | 步骤 | 操作 | 成功标志 |
 |---|---|---|
-| 1. 安装 | 下载 `perfdog.exe`（或 clone 源码双击 `start_perfdog.bat`） | — |
+| 1. 安装 | 拿分发包 zip 解压（或 clone 源码双击 `start_perfdog.bat`） | — |
 | 2. 连真机 | 手机开 USB 调试连电脑，`adb devices` 看到 `xxx device`；手机打开被测小游戏**保持前台** | 命令行列出设备 |
-| 3. 启动 | 双击 exe / bat（自动开浏览器看板） | 控制台打印「目标进程 … pid=xxxx」「CPU 核数」「设备: …」 |
+| 3. 启动 | 双击 `start_perfdog.bat`（自动开浏览器看板） | 控制台打印「目标进程 … pid=xxxx」「CPU 核数」「设备: …」 |
 | 4. 看板 | 浏览器看实时曲线；顶部下拉可热切换被测应用 | FPS/CPU/内存曲线在动，状态栏"采集中" |
 | 5. 停止 | 看板点「⏹ 停止采集」或控制台 Ctrl+C 一次 | 提示已生成 HTML 报告 |
 | 6. 报告在哪 | 状态栏"数据:"一行有目录：`collector/output/<时间戳>/`（jsonl + 自包含 HTML）；历史报告页 `http://localhost:8080/report.html` 随时回看 | 双击 HTML 即看完整报告 |
@@ -276,7 +280,7 @@ python main.py --package com.example.game --process-pattern "" --web
 | `devices.md` | ✅ 现行 | 真机适配矩阵、机型行为差异、换机验收步骤 |
 | `UI优化建议.md` | 📋 排期参考 | 历史看板 UI 评估（2026-08-27），头部有完成状态概览 |
 | `代码评估与优化项目.md` | 🗄️ 历史/参考 | 2026-08-21 双模型评审产出，多数优化项已实施 |
-| `打包后操作流程与改动需求.md` | 🗄️ 历史（已实施完毕） | 2026-08-21 打包体验梳理，P0/P1 项已落地 |
+| `打包后操作流程与改动需求.md` | 🗄️ 历史（已实施完毕） | 2026-08-21 打包体验梳理；**其中 exe/安装包分发部分已于 v72 取消**，现改为 zip 分发 |
 | `评估报告-kimi-k3.md` | 🗄️ 历史评估（归档） | 2026-08-21 首评 + 2026-08-24 二次评估，对应版本已过时 |
 | `评估报告-qwen3.8-max.md` | 🗄️ 历史评估（归档） | 2026-08-21 评估，对应版本已过时 |
 

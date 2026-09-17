@@ -12,16 +12,8 @@ collector/output/
 # 一次性验证产物（非代码）
 验证统计卡片.html
 
-# PyInstaller 打包产物（build/、dist/、spec、staging 均为本机构建产物）
-build/
-dist/
-*.spec
-# 例外：根目录 perfdog.spec 是手工维护的打包配置（CI build.yml 依赖），
-# 其余 .spec 仍是本机构建产物
-!/perfdog.spec
-packaging/staging/
-# Inno Setup 安装包产物
-packaging/installer_output/
+# 分发 zip 产物（python tools/make_zip.py 的输出目录）
+share/
 
 # 其它
 *.log

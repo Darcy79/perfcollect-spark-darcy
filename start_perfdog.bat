@@ -26,7 +26,9 @@ echo  Data saved  : output\<timestamp>\  (jsonl + html)
 echo  Stop        : Ctrl+C twice
 echo ==================================================
 echo.
-"%UV%" run --no-project python main.py --web
+rem --- --with openpyxl: only "export XLSX" needs it; uv fetches it on first run
+rem     (keeps zip distribution zero-setup; CSV / HTML export need nothing extra) ---
+"%UV%" run --no-project --with openpyxl python main.py --web
 
 pause
 endlocal
