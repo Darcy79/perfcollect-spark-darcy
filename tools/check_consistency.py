@@ -53,6 +53,8 @@ def check():
     errors = []
     changelog = _read("CHANGELOG.md")
     agents = _read("AGENTS.md")
+    readme = _read("README.md")
+    metrics = _read("指标说明.md")
     architecture = _read("架构设计.md")
     memory = _read("开发交接记忆-20260917.md")
     # 注：项目评估与优化待办-20260917.md 是本机维护、未纳入版本库的文档，不能作为
@@ -79,6 +81,27 @@ def check():
         "交接记忆": memory_versions[0] if memory_versions else None,
     }
     _expect_equal("项目版本", project_versions, errors)
+
+    # README 的文档导航曾长期停在 V0.4/V1.0，而权威文档已到
+    # V0.7/V1.5。把索引版本纳入门禁，防止下次只升正文却忘记导航。
+    metrics_doc_version = _match(
+        metrics, r"> 版本：(V\d+\.\d+)", "指标说明版本", errors)
+    architecture_doc_version = _match(
+        architecture, r"> 版本：(V\d+\.\d+)", "架构设计文档版本", errors)
+    readme_metrics_version = _match(
+        readme, r"`指标说明\.md`\s*\|\s*✅ 现行 (V\d+\.\d+)",
+        "README 指标说明版本", errors)
+    readme_architecture_version = _match(
+        readme, r"`架构设计\.md`\s*\|\s*✅ 现行 (V\d+\.\d+)",
+        "README 架构设计版本", errors)
+    _expect_equal("指标说明文档版本", {
+        "权威文档": metrics_doc_version[0] if metrics_doc_version else None,
+        "README": readme_metrics_version[0] if readme_metrics_version else None,
+    }, errors)
+    _expect_equal("架构设计文档版本", {
+        "权威文档": architecture_doc_version[0] if architecture_doc_version else None,
+        "README": readme_architecture_version[0] if readme_architecture_version else None,
+    }, errors)
 
     changelog_counts = _match(
         changelog, r"\| 测试 \| Python \*\*(\d+)\*\* 条 \+ JS \*\*(\d+)\*\*",

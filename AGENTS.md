@@ -13,12 +13,12 @@ Windows + adb 采集 FPS / CPU / 内存 / 网络 / 温度 → 本地 `jsonl` →
 
 ---
 
-## 2. 当前状态（截至 2026-09-18，v88）
+## 2. 当前状态（截至 2026-09-18，v89）
 
 | 项 | 值 |
 |---|---|
 | 仓库 / 分支 | https://github.com/Darcy79/perfdog-spark-darcy · `main` |
-| 前端资源版本 | **v69**（改前端必须升 `?v=`，`web/index.html` + `web/report.html` 各 3 处） |
+| 前端资源版本 | **v70**（改前端必须升 `?v=`，`web/index.html` + `web/report.html` 各 3 处） |
 | 测试 | Python **252** 条（`tests/`）+ JS **149** 断言（`tests/test_nearest_cat.js`） |
 | 最近变更 | `CHANGELOG.md`（**接手前必读最新 1~2 条**） |
 

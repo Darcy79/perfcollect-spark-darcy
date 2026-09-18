@@ -100,7 +100,8 @@ def data_rows(rows):
 def fps_source(f):
     """判定该采样点的 FPS 采集通道："sf" / "gfxinfo" / ""（无数据或错误）。
 
-    两通道 Jank/帧时间口径不同（sf 按帧间隔 >2×刷新周期，gfxinfo 用系统 Janky 计数），
+    两通道 Jank/帧时间口径不同（sf 按帧间隔 >2×实际呈现节奏×1.1，
+    新帧不足时回退 2×刷新周期；gfxinfo 用系统 Janky 计数），
     同一次采集中途可能切换 → 导出必须能区分，否则整段数据被当成同一口径解读。
     gfxinfo 结果自带 source 字段；SF 通道结果没有（不改 jsonl schema，此处按
     "有层名 + 带 refresh_hz 键" 反推），错误样本（no_layer/read_fail）留空。
