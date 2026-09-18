@@ -283,12 +283,16 @@ class FpsCollector:
         return self._parse_gfxinfo(out)
 
     def _switch_to_gfx(self, ts):
-        """切到 gfx 通道（首轮执行 reset）。返回 True 表示切换成功。"""
+        """切到 gfx 通道并返回首个样本（首轮执行 reset）。
+
+        切换和首次采样必须在这里一次完成；调用方若再立即调一次
+        _sample_gfx(ts)，会在同一 ts 下重复 dumpsys gfxinfo，dt=0 也不会产生
+        更多有效数据，只会增加 ADB 往返和切换延迟。
+        """
         self.mode = "gfx"
         self._gfx_inited = False
         self._gfx_last = None
-        self._sample_gfx(ts)
-        return True
+        return self._sample_gfx(ts)
 
     def _sample_gfx(self, ts):
         if not self._gfx_inited:
@@ -334,7 +338,10 @@ class FpsCollector:
                 df = total - ltotal
                 if df > 0:
                     result["fps"] = round(df / dt, 2)
-                    result["jank_count"] = max(janky - ljanky, 0)
+                    # ROM 统计重置/延迟更新时，Janky 计数增量可能短暂大于
+                    # 总帧增量。卡顿帧不可能超过有效帧数，在数据边界夹到 [0, df]，
+                    # 避免产出 >100% 的非物理 Jank 率。
+                    result["jank_count"] = min(max(janky - ljanky, 0), df)
                     result["jank_total"] = df
                     result["jank_rate"] = round(result["jank_count"] / df, 4)
                 elif df == 0:
@@ -438,8 +445,7 @@ class FpsCollector:
                             "hint": hint or "渲染层暂失,重匹配中"}
                 # 从未有 SurfaceView 层：可能是普通 View 应用 → 试 gfxinfo
                 if self._gfx_read() is not None:
-                    self._switch_to_gfx(ts)
-                    return self._sample_gfx(ts)
+                    return self._switch_to_gfx(ts)
                 return {"layer": None, "total_frames": None, "fps": None,
                         "jank_rate": None, "error": err,
                         "hint": hint or "应用未在前台或无渲染层"}
@@ -472,8 +478,7 @@ class FpsCollector:
                 except Exception:
                     n = 0
             if n <= 1 and self._gfx_read() is not None:
-                self._switch_to_gfx(ts)
-                return self._sample_gfx(ts)
+                return self._switch_to_gfx(ts)
 
         result = {"layer": self.layer, "total_frames": n, "fps": None, "jank_rate": None,
                   "jank_count": 0, "jank_total": 0,

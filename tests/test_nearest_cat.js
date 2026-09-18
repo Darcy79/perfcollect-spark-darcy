@@ -452,6 +452,21 @@ if (typeof computeCompleteness !== 'function') {
      'gfx_unavailable：完整度卡片显示中文回退说明');
 }
 
+// ---------------- FPS 质量标记可见性（v90） ----------------
+{
+  const qualityNote = window.PerfCharts.fpsQualityNote;
+  eq(qualityNote([{ fps: { fps: 60 } }]), '', 'FPS 质量正常：不增加噪声');
+  eq(qualityNote([
+    { fps: { fps: 90, fps_warn: 'low_frames', fps_clamped: true } },
+    { fps: { fps: 80, fps_warn: 'low_frames' } },
+  ]), '  ⚠低帧数低置信 2 点 · FPS钳制 1 点',
+  'FPS 质量异常：汇总低置信与钳制点');
+  eq(qualityNote([
+    { fps: { fps: 90, fps_warn: 'low_frames', fps_clamped: true },
+      metric_meta: { fps: { is_reused: true } } },
+  ]), '', 'FPS 质量标记：不重复统计复用快照');
+}
+
 if (failures.length) {
   console.error(`[x] 断言失败 ${failures.length} 条（通过 ${passed}）：`);
   failures.forEach((f) => console.error('    - ' + f));

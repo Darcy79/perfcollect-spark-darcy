@@ -1177,7 +1177,8 @@
     function put(id, text) { var el = document.getElementById(id); if (el) el.textContent = text; }
     // v61：FPS 统计栏附带缺数构成——区分"链路读取失败(probe_fail)"与"无渲染层(no_layer)"，
     // 避免只看到一条空白曲线却不知道缺了多少点、为什么缺（2026-09-11 事故复盘）
-    put('stat-fps', 'FPS ' + statText(freshSeries(rows, 'fps', function (r) { return r.fps ? r.fps.fps : null; }), '') + fpsMissingNote(rows));
+    put('stat-fps', 'FPS ' + statText(freshSeries(rows, 'fps', function (r) { return r.fps ? r.fps.fps : null; }), '') +
+        fpsMissingNote(rows) + fpsQualityNote(rows));
     put('stat-frametime', (hasFpsWindowSummary(rows) ? '帧时间P95(短窗峰值) ' : '帧时间P95 ') +
         statText(freshSeries(rows, 'fps', function (r) { return fpsMetric(r, 'frame_p95_ms'); }), 'ms', 1));
     put('stat-cpu', '进程CPU ' + statText(freshSeries(rows, 'cpu', function (r) { return r.cpu ? r.cpu.cpu_proc_pct : null; }), '%'));
@@ -1410,6 +1411,22 @@
     return '  ⚠缺 ' + missing + ' 点（' + _reasonTexts(reasons) + '）';
   }
 
+  // FPS 质量标记注记：只在真实新样本出现低置信/物理上限钳制时显示，
+  // 旧 JSONL 无 metric_meta 时按每点真实样本兼容；正常报告返回空串不增加噪声。
+  function fpsQualityNote(rows) {
+    var low = 0, clamped = 0;
+    (rows || []).forEach(function (r) {
+      if (!metricIsFresh(r, 'fps')) return;
+      var f = r.fps || {};
+      if (f.fps_warn === 'low_frames') low++;
+      if (f.fps_clamped === true) clamped++;
+    });
+    var parts = [];
+    if (low) parts.push('低帧数低置信 ' + low + ' 点');
+    if (clamped) parts.push('FPS钳制 ' + clamped + ' 点');
+    return parts.length ? '  ⚠' + parts.join(' · ') : '';
+  }
+
   // 渲染完整度卡片；全部指标完整时不显示（避免正常报告顶部多一块噪声）
   function renderCompleteness(elId, comp) {
     var el = document.getElementById(elId);
@@ -1589,6 +1606,7 @@
     markCompleteness: markCompleteness,
     completenessGrade: completenessGrade,
     _reasonText: _reasonText,   // 纯函数，供错误码文案回归测试
+    fpsQualityNote: fpsQualityNote, // FPS 低置信/钳制注记（纯函数）
     _statText: statText,
   };
 })();

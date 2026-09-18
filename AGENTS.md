@@ -13,13 +13,13 @@ Windows + adb 采集 FPS / CPU / 内存 / 网络 / 温度 → 本地 `jsonl` →
 
 ---
 
-## 2. 当前状态（截至 2026-09-18，v89）
+## 2. 当前状态（截至 2026-09-18，v90）
 
 | 项 | 值 |
 |---|---|
 | 仓库 / 分支 | https://github.com/Darcy79/perfdog-spark-darcy · `main` |
-| 前端资源版本 | **v70**（改前端必须升 `?v=`，`web/index.html` + `web/report.html` 各 3 处） |
-| 测试 | Python **252** 条（`tests/`）+ JS **149** 断言（`tests/test_nearest_cat.js`） |
+| 前端资源版本 | **v71**（改前端必须升 `?v=`，`web/index.html` + `web/report.html` 各 3 处） |
+| 测试 | Python **255** 条（`tests/`）+ JS **152** 断言（`tests/test_nearest_cat.js`） |
 | 最近变更 | `CHANGELOG.md`（**接手前必读最新 1~2 条**） |
 
 ---
@@ -44,8 +44,8 @@ uv run --no-project python main.py --web            # --duration 60 定时长；
 双击 start_dashboard.bat
 
 # 测试（在项目根执行）
-uv run --no-project python -m unittest discover -s tests -p "test_*.py"   # 应 252 条全绿
-C:\Users\SparkGame\.cherrystudio\bin\bun.exe tests/test_nearest_cat.js    # 应 138 断言全过
+uv run --no-project python -m unittest discover -s tests -p "test_*.py"   # 应 255 条全绿
+C:\Users\SparkGame\.cherrystudio\bin\bun.exe tests/test_nearest_cat.js    # 应 152 断言全过
 
 # JS 语法检查（沙箱内 bun/cmd 不能走管道 → 必须 Start-Process 重定向）
 C:\Users\SparkGame\.cherrystudio\bin\bun.exe build web/assets/app.js --outfile <临时文件>
@@ -99,8 +99,8 @@ FPS 与 Jank/帧时间的时间窗**故意不同**（FPS=滚动缓冲主段均�
 
 ## 8. 提交前自检清单
 
-- [ ] Python 测试全绿（`unittest discover`，当前应为 252 条）
-- [ ] JS 测试全绿（`bun tests/test_nearest_cat.js`，138 断言）
+- [ ] Python 测试全绿（`unittest discover`，当前应为 255 条）
+- [ ] JS 测试全绿（`bun tests/test_nearest_cat.js`，当前应为 152 断言）
 - [ ] JS 语法检查通过（`bun build` app.js / 页面内联脚本）
 - [ ] `python tools/check_consistency.py` 通过
 - [ ] 改了前端 → `?v=` 已升、无旧版本号残留

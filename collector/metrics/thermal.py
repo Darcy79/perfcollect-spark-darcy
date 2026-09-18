@@ -15,26 +15,35 @@
 """
 
 BATTERY = "/sys/class/power_supply/battery"
+# sys 节点首次探测失败后的低频重试间隔。既避免不支持的 ROM 每轮多做
+# 两次无效 cat，又不会因启动阶段一次 ADB 抖动就整段采集永久丢失电流/功率。
+SYS_REPROBE_INTERVAL = 30.0
 
 
 class ThermalCollector:
-    def __init__(self, adb, base=BATTERY):
+    def __init__(self, adb, base=BATTERY, sys_reprobe_interval=SYS_REPROBE_INTERVAL):
         self.adb = adb
         self.base = base
+        self.sys_reprobe_interval = max(float(sys_reprobe_interval), 0.0)
         # 降级模式缓存：sys 节点若确认不可读（如荣耀需 root），直接走 dumpsys，
         # 避免每轮都做 3 次无效 cat 往返（性能优化 2026-08-12）
-        self.sys_unavailable = None   # None=未探测, True=已确认不可读
+        self.sys_unavailable = None   # None=未探测, True=当前不可读
+        self._next_sys_probe = 0.0
 
-    def _probe_sys(self):
-        """探测 sys 节点是否可读；连续两个节点失败则判为不可读，锁定降级。"""
-        if self.sys_unavailable is not None:
-            return not self.sys_unavailable
+    def _probe_sys(self, ts):
+        """探测 sys 节点是否可读；失败后降级，到期再低频重试。"""
+        if self.sys_unavailable is False:
+            return True
+        if self.sys_unavailable is True and ts < self._next_sys_probe:
+            return False
         ok = 0
         for name in ("temp", "current_now"):
             if self._read_sys(name) is not None:
                 ok += 1
         # 只要有一个节点可读就保留 sys 通道；全部失败则降级
         self.sys_unavailable = ok == 0
+        self._next_sys_probe = (ts + self.sys_reprobe_interval
+                                if self.sys_unavailable else 0.0)
         return not self.sys_unavailable
 
     def _read_sys(self, name):
@@ -72,7 +81,7 @@ class ThermalCollector:
         result = {"temp_c": None, "current_ma": None, "voltage_v": None, "power_w": None}
 
         temp = cur = vol = None
-        if self._probe_sys():
+        if self._probe_sys(ts):
             temp = self._read_sys("temp")          # 0.1°C
             cur = self._read_sys("current_now")    # uA
             vol = self._read_sys("voltage_now")    # uV

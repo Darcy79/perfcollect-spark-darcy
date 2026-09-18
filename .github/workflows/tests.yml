@@ -2,7 +2,9 @@ name: Tests
 
 # v72：原 build.yml 是「打包 Windows exe + 发 Release」，已随 exe/安装包分发一起取消
 # （项目改为 zip 分发，见 tools/make_zip.py）。
-# 这里保留 CI 的价值：每次推送/PR 跑一遍语法检查 + 全部单元测试，防止回归。
+# 这里保留 CI 的价值：每次推送/PR 跑一遍语法检查 + 全部单元测试 + 状态文档一致性门禁，
+# 防止回归。**开发阶段不在 CI 里做打包**（用户 2026-09-18：还在开发优化阶段，例行流程
+# 不需要走到自动打包）；需要分发时本地按需执行 `python tools/make_zip.py`。
 # 手动触发：Actions → Tests → Run workflow
 
 on:
@@ -55,7 +57,3 @@ jobs:
       - name: JS assertions (web/assets/app.js pure functions)
         shell: pwsh
         run: bun run tests/test_nearest_cat.js
-
-      - name: Packaging script smoke test (zip dry-run)
-        shell: pwsh
-        run: python tools/make_zip.py --out "${{ runner.temp }}\share"

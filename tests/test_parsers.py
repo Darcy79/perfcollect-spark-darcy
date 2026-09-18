@@ -310,6 +310,57 @@ class TestFpsSparseSegment(unittest.TestCase):
         self.assertEqual(r2["fps"], 60.0)   # 主段 = 恢复后的 8 帧（并列取靠后段）
 
 
+class GfxSequenceAdb:
+    """gfxinfo 累计值序列替身，可统计 reset/读取往返。"""
+
+    def __init__(self, samples, sf_list="system.layer\n"):
+        self.samples = list(samples)
+        self.sf_list = sf_list
+        self.calls = []
+
+    def shell(self, args):
+        self.calls.append(list(args))
+        joined = " ".join(args)
+        if "SurfaceFlinger --list" in joined:
+            return self.sf_list
+        if "gfxinfo" in joined and "reset" in joined:
+            return ""
+        if "gfxinfo" in joined:
+            total, janky = self.samples.pop(0)
+            return (f"Total frames rendered: {total}\n"
+                    f"Janky frames: {janky} (0.0%)\n")
+        raise AssertionError(f"未预期的 adb 调用: {args}")
+
+
+class TestGfxChannelBoundaries(unittest.TestCase):
+    """gfxinfo 切换往返与异常 Jank 计数边界（v90）。"""
+
+    @staticmethod
+    def _gfx_reads(adb):
+        return [c for c in adb.calls
+                if "gfxinfo" in " ".join(c) and "reset" not in " ".join(c)]
+
+    def test_sample_switch_reads_baseline_once_after_probe(self):
+        # 无 SF 层：一次可用性探测 + reset 后一次基线读取。
+        # 旧实现还会在同一 ts 多读一次（共 3 次非 reset gfxinfo）。
+        adb = GfxSequenceAdb([(100, 5), (0, 0), (1, 0)])
+        c = FpsCollector(adb, "com.example.game", "", retry_interval=0.0)
+        r = c.sample(1.0)
+        self.assertEqual(c.mode, "gfx")
+        self.assertEqual(r["source"], "gfxinfo")
+        self.assertEqual(len(self._gfx_reads(adb)), 2)
+        self.assertEqual(sum("reset" in " ".join(x) for x in adb.calls), 1)
+
+    def test_jank_delta_is_clamped_to_frame_delta(self):
+        adb = GfxSequenceAdb([(100, 10), (110, 25)])
+        c = FpsCollector(adb, "com.example.game", "")
+        c._switch_to_gfx(1.0)
+        r = c._sample_gfx(2.0)
+        self.assertEqual(r["jank_total"], 10)
+        self.assertEqual(r["jank_count"], 10)
+        self.assertEqual(r["jank_rate"], 1.0)
+
+
 class TestExportFpsSource(unittest.TestCase):
     """导出扁平化透出 FPS 通道标记（2026-08-25，二次评估 kimi）。"""
 
@@ -732,6 +783,43 @@ class TestThermalValidation(unittest.TestCase):
         t = ThermalCollector(adb)
         r = t.sample(0)
         self.assertEqual(r["temp_c"], 43.0)
+
+    def test_initial_sys_failure_reprobes_and_recovers(self):
+        class RecoveringAdb:
+            def __init__(self):
+                self.recovered = False
+                self.calls = []
+
+            def shell(self, args):
+                self.calls.append(list(args))
+                joined = " ".join(args)
+                if "/battery/" in joined:
+                    if not self.recovered:
+                        raise RuntimeError("temporary adb failure")
+                    if joined.endswith("/temp"):
+                        return "320\n"
+                    if joined.endswith("/current_now"):
+                        return "500000\n"
+                    if joined.endswith("/voltage_now"):
+                        return "4000000\n"
+                if "dumpsys battery" in joined:
+                    return "temperature: 350\nvoltage: 4100\n"
+                raise AssertionError(f"未预期的 adb 调用: {args}")
+
+        adb = RecoveringAdb()
+        t = ThermalCollector(adb, sys_reprobe_interval=30.0)
+        self.assertEqual(t.sample(0.0)["temp_c"], 35.0)   # 首次失败，降级
+        sys_calls = lambda: sum("/battery/" in " ".join(x) for x in adb.calls)
+        initial_calls = sys_calls()
+
+        adb.recovered = True
+        self.assertEqual(t.sample(10.0)["temp_c"], 35.0)  # 退避期不重试 sys
+        self.assertEqual(sys_calls(), initial_calls)
+
+        r = t.sample(30.0)                                # 到期重试并恢复
+        self.assertEqual(r["temp_c"], 32.0)
+        self.assertEqual(r["power_w"], 2.0)
+        self.assertFalse(t.sys_unavailable)
 
 
 class TestPidResolverParsing(unittest.TestCase):

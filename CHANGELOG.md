@@ -6,24 +6,43 @@
 
 ---
 
-## 当前状态（2026-09-18，v89）
+## 当前状态（2026-09-18，v90）
 
 | 项 | 值 |
 |---|---|
-| 前端资源版本 | **v70**（`web/index.html` + `web/report.html` 各 3 处 `?v=`） |
-| 测试 | Python **252** 条 + JS **149** 断言（全绿） |
+| 前端资源版本 | **v71**（`web/index.html` + `web/report.html` 各 3 处 `?v=`） |
+| 测试 | Python **255** 条 + JS **152** 断言（全绿） |
 | 分发方式 | **zip**（`make_zip.bat` / `tools/make_zip.py` → `share/perfdog-cn-<版本>-<日期>.zip`）——**已无 exe / 安装包** |
 | 采集环境 | Windows + adb 真机（荣耀 ADT-AN00 Magic3 Pro / OPPO；详见 `devices.md`） |
 | 工具链 | `uv`（Python）+ `bun`（JS 测试）+ `adb`；路径见 `AGENTS.md` §4 |
 
 **未完成 / 待验证**
 
-- 代码（非阻塞）：report.html 内联 JS 抽离、main.py 继续可测试化、apk_label 二进制解析模糊测试；前端尚未展示 `fps_clamped` / `fps_warn`（当前只在 jsonl 与 CSV/XLSX 里）
+- 代码（非阻塞）：report.html 内联 JS 抽离、main.py 继续可测试化、apk_label 二进制解析模糊测试
 - 待真人参与：真机矩阵（微信多开 / 分屏、高刷切换、30min+ 长测）；官方 PerfDog 对拍（**先出《口径差异白皮书》**，口径素材见 `指标说明.md`「九」）
 - 待真机确认：开小游戏时 appbrand 进程的 `comm`/`cmdline` 实测值；OPPO 及其他品牌 `comm` 截断方向（首 15 / 末 15）；微信多开时 appbrand1/2 能否区分
 - 待真机抽检：v73 的 pin 蓝线修复（wizard 流程已在无设备环境下用 Edge headless 复现验证，真机待设备恢复后手工确认一次）
 
 ---
+
+## v90（2026-09-18 · Codex）—— gfxinfo/温度采集可靠性与 FPS 质量提示
+
+- **gfxinfo 切换降载**：通道切换函数直接返回首个基线样本，不再在同一
+  `ts` 立即重复 `dumpsys gfxinfo`；正常指标口径不变，减少一次 ADB 往返。
+  边界副作用（主会话 A/B 实测）：切换点的 `total_frames` 取第一次读取值、且该帧
+  计入下一次增量（不丢帧）；「连续 0 帧 → 回退 sf」现严格按 3 次采样推进
+  （旧实现每次切换记 2 次、实际约 1.5 次即回退）→ WebGL 类应用回退延迟约 0.5s，
+  与注释声明的“连续 3 次”一致。
+- **gfxinfo 边界防护**：ROM 计数重置/延迟导致 Janky 增量大于总帧增量时，
+  `jank_count` 夹到 `[0, 帧增量]`，防止产出超过 100% 的非物理 Jank 率。
+- **温度通道自恢复**：sys 节点首次探测失败后改为 30s 低频重试；
+  不支持的 ROM 仍避免每轮无效 `cat`，启动阶段 ADB 瞬断后则能自动恢复电流/功率。
+- **FPS 质量可见**：报告 FPS 统计栏汇总 `fps_warn="low_frames"` 与
+  `fps_clamped=true` 点数，排除复用快照；正常数据不增加界面噪声。
+- **口径文档**：《指标说明》升至 V0.8，修正“采集器无上限”的过时表述，
+  说明保护性钳制和低置信标记。
+- **回归**：新增 3 项 Python 与 3 条 JS 断言；Python **252 → 255**，
+  JS **149 → 152**；前端资源 **v70 → v71**。
 
 ## v89（2026-09-18 · Codex）—— 报告口径说明与实现对齐
 
