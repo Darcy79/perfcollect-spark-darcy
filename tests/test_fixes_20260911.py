@@ -24,7 +24,7 @@ if _COLLECTOR not in sys.path:
     sys.path.insert(0, _COLLECTOR)
 
 from web import same_origin_ok, trim_report_cache
-from main import backoff_sleep, FAIL_ALERT_STREAK, BACKOFF_MAX_S
+from runtime_health import backoff_sleep, FAIL_ALERT_STREAK, BACKOFF_MAX_S
 from export_report import COLUMNS, flatten, export_csv
 
 

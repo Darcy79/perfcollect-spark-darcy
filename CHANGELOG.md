@@ -6,24 +6,235 @@
 
 ---
 
-## 当前状态（2026-09-17，v74）
+## 当前状态（2026-09-18，v88）
 
 | 项 | 值 |
 |---|---|
-| 前端资源版本 | **v66**（`web/index.html` + `web/report.html` 各 3 处 `?v=`） |
-| 测试 | Python **178** 条 + JS **113** 断言（全绿） |
+| 前端资源版本 | **v69**（`web/index.html` + `web/report.html` 各 3 处 `?v=`） |
+| 测试 | Python **252** 条 + JS **149** 断言（全绿） |
 | 分发方式 | **zip**（`make_zip.bat` / `tools/make_zip.py` → `share/perfdog-cn-<版本>-<日期>.zip`）——**已无 exe / 安装包** |
 | 采集环境 | Windows + adb 真机（荣耀 ADT-AN00 Magic3 Pro / OPPO；详见 `devices.md`） |
 | 工具链 | `uv`（Python）+ `bun`（JS 测试）+ `adb`；路径见 `AGENTS.md` §4 |
 
 **未完成 / 待验证**
 
-- 代码（非阻塞）：report.html 内联 JS 抽离、main.py 可测试化、web.py 18 端点端到端测试、apk_label 二进制解析模糊测试；前端尚未展示 `fps_clamped` / `fps_warn`（当前只在 jsonl 与 CSV/XLSX 里）
+- 代码（非阻塞）：report.html 内联 JS 抽离、main.py 继续可测试化、apk_label 二进制解析模糊测试；前端尚未展示 `fps_clamped` / `fps_warn`（当前只在 jsonl 与 CSV/XLSX 里）
 - 待真人参与：真机矩阵（微信多开 / 分屏、高刷切换、30min+ 长测）；官方 PerfDog 对拍（**先出《口径差异白皮书》**，口径素材见 `指标说明.md`「九」）
 - 待真机确认：开小游戏时 appbrand 进程的 `comm`/`cmdline` 实测值；OPPO 及其他品牌 `comm` 截断方向（首 15 / 末 15）；微信多开时 appbrand1/2 能否区分
 - 待真机抽检：v73 的 pin 蓝线修复（wizard 流程已在无设备环境下用 Edge headless 复现验证，真机待设备恢复后手工确认一次）
 
 ---
+
+## v88（2026-09-18 · Codex）—— 缺帧数报告渲染修复
+
+- **报告页不再整体中断**：FPS/帧时间全缺时，`applyTime` 和 `resize`
+  只操作当前可见图表，避免 ECharts 在 `display:none` 的 0×0 容器上重建
+  坐标系抛错；CPU/内存/网络/温度图、统计、汇总与完整度卡片继续渲染。
+- **错误码文案**：`gfx_unavailable` 显示为“gfxinfo 不支持该应用，已回退
+  SurfaceFlinger”，不再直接暴露英文原码。
+- **回归覆盖**：新增 11 条 JS 断言，覆盖隐藏图不收到 `setOption/resize`、
+  其他四图继续渲染及错误码中文映射；JS **138 → 149**。
+- **工程卫生**：根 `.gitignore` 显式忽略 `.uv-cache/`。
+- **兼容性**：未修改采集器、指标算法、JSONL schema 或 Web API；前端资源
+  **v68 → v69**。
+
+## v87（2026-09-17 · Codex）—— logcat 收尾、事件写入边界与真实浏览器回归
+
+- **事件写入收口**：新增 `collector/event_sink.py`，logcat 事件改为惰性打开、
+  批量 JSONL 写入与单一关闭边界；零事件仍不创建空文件。
+- **停止顺序**：`LogcatMonitor.stop()` 先置停止信号、终止子进程并有限等待
+  reader 线程；主流程按“停生产者 → 排空尾部事件 → 关 sink”收尾，重复停止幂等。
+- **历史列表修复**：真实浏览器回归发现 `*.events.jsonl` 被误列为独立报告；
+  `/api/runs` 现排除事件旁车文件，`/api/report` 也拒绝将其当性能报告读取。
+- **最小浏览器回归**：新增 `tools/browser_smoke_server.py` 生成双场景合成数据；
+  已用真实浏览器验证实时图、Pin 蓝线/数值浮层、历史场次切换、全局时间滑块、
+  logcat 事件虚线与控制台无警告/错误。
+- **测试/CI**：新增 7 项覆盖 sink、停止排空、线程回收和事件旁车过滤；
+  新模块/浏览器数据服务纳入 Python 3.12 语法检查。Python **245 → 252**，JS **138** 全绿。
+- **分发**：按当前优先级不生成 zip。
+
+## v86（2026-09-17 · Codex）—— 目标错配状态收口与控制台输出解耦
+
+- **TargetMismatchTracker**：新增 `collector/target_monitor.py`，将 AppBrand 渲染层/
+  进程索引错配的判定、消息去重和恢复沿从 `main.py` 提取为纯状态机。
+- **修复过期告警**：当页面已显示微信 AppBrand 错配后热切换到非微信 App，
+  原 watcher 会直接跳过并永久保留旧告警；现在会发出一次 recovered 状态沿清理 Web 状态。
+- **行为不扩张**：仍然只在微信目标下读 SurfaceFlinger；同一错配不重复落盘，
+  不自动更换进程，不修改 `target_mismatch` 事件字段。
+- **控制台格式化**：新增 `collector/console_output.py`，将 FPS 错误文案、CPU/内存/
+  网络/温度单行输出提取为纯函数；`main.py` 只负责打印返回文本。
+- **兼容性**：无指标算法、采样周期、JSONL schema、Web API 或前端变化；
+  已锁定三种 FPS 错误文案、节流/缺值占位符及未知错误码仍显示有效 FPS 的历史契约。
+- **测试/CI**：新增 7 项状态与格式回归，两个新模块纳入 Python 3.12 语法检查；
+  Python **238 → 245**，JS **138** 全绿。
+- **分发**：按当前优先级不生成 zip。
+
+## v85（2026-09-17 · Codex）—— 运行健康状态机从 main.py 解耦
+
+- **RuntimeHealthTracker**：新增 `collector/runtime_health.py`，统一维护每轮指标
+  错误码、通道缺数/断连事件沿、多数指标连续失败计数和实时健全性连续命中状态。
+- **副作用边界**：新组件只返回 `probe_required` / `recovered` 等状态沿；
+  ADB 探活、控制台告警、Web status 更新和 JSONL 事件落盘仍在 `main.py`，没有引入隐式 I/O。
+- **纯逻辑归位**：`ChannelAlertTracker`、`backoff_sleep`、`row_has_any_value`
+  从 CLI 入口迁入运行健康模块；原错误阈值、退避公式、事件字段和首点门槛保持不变。
+- **恢复语义**：仅在连续失败第 3 轮首次请求 ADB 探活，持续失败不重复探活；
+  低于多数错误阈值后清零，且只发一次 Web 恢复状态沿，与原实现一致。
+- **测试/CI**：新增 4 项覆盖第 3 轮探活、去重、恢复、短失败清零和
+  健全性状态所有权；新模块纳入 Python 3.12 语法检查。Python **234 → 238**，JS **138** 全绿。
+- **分发**：按当前优先级不生成 zip，留待项目功能/架构全面收敛后统一验收。
+
+## v84（2026-09-17 · Codex）—— 采样调度与样本聚合从 main.py 解耦
+
+- **SamplerScheduler**：`collector/sampling.py` 新增独立调度器，统一创建五类
+  周期 worker，保留“采样耗时从周期中扣除、最低等待 50ms、停止竞态安全收口”语义。
+- **SampleAggregator**：将 mailbox 快照转为 JSONL 行的逻辑从 `main.py` 提取，
+  统一生成 `ts/t_ms/target`、`metric_meta`、`fps_windows`、短窗摘要和丢弃计数。
+- **职责收敛**：`main.py` 现在只负责创建调度器、取得目标代次快照并调用聚合器；
+  指标执行节奏和行数据组装可分别独立测试。
+- **兼容性**：未修改采样周期、指标算法、目标切换、停止顺序、CLI、JSONL 字段或前端；
+  schema 保持 v3，前端资源保持 v68。
+- **测试**：新增 5 项覆盖 worker 命名/登记、停止前置、耗时补偿、
+  新鲜/复用样本及 FPS 短窗摘要等价性；Python **229 → 234**，JS **138** 全绿。
+- **分发**：按当前优先级未重新生成 v84 zip；分发验收留待功能和架构收敛后统一执行。
+
+## v83（2026-09-17 · Codex）—— 项目元数据一致性门禁
+
+- **新增只读校验**：`tools/check_consistency.py` 自动对比 CHANGELOG、AGENTS、
+  架构文档、交接记忆和优化待办中的项目版本与测试计数。
+- **真实计数**：用 `unittest` discovery 直接统计当前 Python 用例，与文档中的
+  229 项对比，不再只依赖人工复制数字。
+- **前端缓存版本**：校验 `web/index.html` 与 `web/report.html` 各有 3 个、
+  且全部与状态文档一致的 `?v=` 引用，防止改前端后漏升版。
+- **CI 门禁**：GitHub Actions 在单元测试后执行一致性检查，脚本本身纳入
+  Python 3.12 语法检查。不一致时直接列出每个文档的实际值并使 CI 失败。
+- **Windows 测试稳定性**：`CaptureSession.wait()` 的 10ms 超时回归改用
+  `perf_counter()` 计时，避免 Python 3.12 / Windows 上 `monotonic()` 15.625ms 分辨率导致的偶发假失败；业务实现未改。
+- **兼容性**：未修改采集器、Web API、前端或分发包内容；Python **229**、
+  JS **138** 保持全绿，前端资源保持 v68。
+
+## v82（2026-09-17 · Codex）—— Web HTTP/SSE 真实端到端回归与资源收口
+
+- **SSE 断连兼容**：将 Windows 客户端正常断开可能产生的
+  `ConnectionAbortedError` 纳入正常结束语义，不再向控制台输出 WinError 10053 堆栈。
+- **Web 服务关闭**：`WebServer.stop()` 现在会原子摘除实例、`shutdown` +
+  `server_close` 释放监听 socket，并有限等待服务线程；重复停止幂等，同一端口可立即重新绑定。
+- **文件句柄**：历史列表读取备注 sidecar 改用上下文管理，消除轮询期间的未关闭文件警告。
+- **真实 HTTP 回归**：新增 `tests/test_web_http.py` 13 项，通过本机随机端口覆盖
+  所有 API、SSE、首页/历史页/静态资源/favicon、停止与重绑定、跨域 POST、
+  备注/events/raw 往返及 report/raw 路径穿越防护。
+- **兼容性**：未修改采集器、指标算法、CLI、JSONL schema 或前端资源；前端版本保持 v68。
+- **验证**：Python **216 → 229**，JS **138** 全绿；Python 3.12 `py_compile`、
+  JS bundle 语法检查与 zip 分发烟测通过。
+
+## v81（2026-09-17 · Codex）—— 核心切换时序、异常契约与采样时间修复
+
+- **目标切换顺序**：`TargetContext.switch_target()` 新增持锁 `before_switch(old_snapshot)`
+  卡口；`target_switch` 事件先提交唯一 writer，新目标才对主循环可见。修复高并发下第一条
+  新目标采样可能排在切换事件之前、导致历史分段边界偏移的问题。
+- **异常契约**：采样器未捕获异常统一写成
+  `{"error":"<metric>_exception","detail":"..."}`，首点门槛、缺数统计和断连状态机
+  都能识别，不再产生静默空洞。
+- **完成时间语义**：采集器继续接收开始时间，保持 CPU/网络差值算法不变；mailbox 的
+  `sampled_at` 改用调用完成时间，使 schema v3 的 `sampled_at_ms` / `age_ms` 与“结果真正
+  可用时间”一致，慢 ADB 调用不再被误算成旧数据年龄。
+- **向导停止收口**：SIGINT 与 Web stop/shutdown 在向导开始前注册；初始化阶段增加取消
+  卡口，停止后不继续创建输出或启动采样线程。若仅含 meta 的文件已经创建，则停止
+  monitor、关闭 writer 和 Web 后安全返回。
+- **兼容性**：指标算法、CLI、JSONL 字段名和前端均未改变，schema 保持 v3、资源 v68。
+- **测试**：新增 5 项覆盖完成时间、标准异常结构、切换前置卡口和并发可见性；Python
+  **211 → 216**，JS **138** 全绿。
+
+## v80（2026-09-17 · Codex）—— CaptureSession 生命周期第一阶段
+
+- **停止状态单一来源**：新增 `collector/capture_session.py`，以 `threading.Event` 统一
+  Ctrl+C、Web `/api/stop`、`/api/shutdown`、向导取消和 duration 到期，不再共享可变 dict。
+- **可中断等待**：采样间隔、断连退避和 mismatch 周期从 `time.sleep()` 改为会话等待；
+  收到停止请求即可唤醒，正常情况下不再额外等待最长一个 mismatch 周期。
+- **线程归属**：五个 sampler 与 mismatch watcher 统一由会话启动、登记和有限时间 join；
+  ADB 调用若正在阻塞只等待总计 1 秒，不强杀线程，继续保持原有超时与容错策略。
+- **关闭顺序**：采集循环退出后先 request_stop、有限回收生产者，再 drain/close
+  `JsonlWriter`；迟到的 mismatch 写入仍由 writer 的关闭保护安全拒绝。
+- **兼容性**：CLI、JSONL schema、采样周期、指标算法和前端均未改变，资源版本保持 v68。
+- **测试/CI**：新增 6 项覆盖初始状态、幂等停止、等待唤醒、shutdown、停止后拒启线程与
+  join 存活报告；CI 语法检查纳入新模块。Python **205 → 211**，JS **138** 全绿。
+
+## v79（2026-09-17 · Codex）—— 指标真实采样时间与去重复统计
+
+- **schema v3**：每个采样点新增 `metric_meta.<metric>`，记录 `seq`、相对采集起点的
+  `sampled_at_ms`、落盘时 `age_ms` 和 `is_reused`；meta 新增
+  `metric_freshness_mode: "sampled_at"`。原指标字段不变，旧读取方可忽略新增字段。
+- **统计纠偏**：实时统计栏和报告汇总只让真实新样本参与 FPS/CPU/内存/网络/温度统计，
+  解决 mem/therm 2 秒采样值在 1 秒报告点中被重复加权的问题；曲线仍保留 latest 连续显示，
+  数据完整度仍按每个报告点是否可用判断。
+- **兼容性**：旧 JSONL 没有 `metric_meta` 时，`metricIsFresh()` 默认把每点视为新样本，
+  保持原统计结果；新报告卡片用“（新采样）”明确标注平均值口径。
+- **导出**：CSV/XLSX 为五类指标分别追加采样时刻、年龄、序号和是否复用字段，便于外部
+  分析按真实样本去重，不覆盖既有列。
+- **前端**：资源版本 **v67 → v68**。
+- **测试**：增加时间/年龄计算、复用识别、时钟偏差保护、导出字段以及新旧报告统计兼容；
+  Python **201 → 205**，JS **127 → 138** 全绿。
+
+## v78（2026-09-17 · Codex）—— 主 JSONL 唯一串行写入器
+
+- **单一写入入口**：新增 `collector/jsonl_writer.py`；meta、采样点、缺数事件、目标切换
+  和 mismatch 事件全部提交给唯一后台写线程，不再由主循环和回调分别持有 `w/a` 文件句柄。
+- **确定顺序**：writer 在注册 Web 回调和启动采样线程前写入 meta，保证 meta 始终为首行；
+  多生产者记录按队列接收顺序落盘，每一行只由一个文件句柄编码和写入。
+- **可靠停止**：采集结束（包括 duration 到期）先置 stop，阻止 sampler/mismatch 继续生产，
+  再 drain 队列、flush、close；HTML 导出只在 writer 完全关闭后读取 JSONL。
+- **flush/异常语义**：`flush=True` 返回即已刷盘；非法 JSON 在提交线程立即失败；打开或写入
+  错误可传播，失败路径会唤醒等待者且不会遗留 writer 线程；关闭后的迟到写入被明确拒绝。
+- **边界**：logcat 的独立 `.events.jsonl` 文件保持原有路径，不混入主性能 JSONL；CLI 与
+  JSONL schema 均未改变。
+- **测试/CI**：新增 7 项，覆盖首行、Unicode、四线程并发 200 条、close drain、同步 flush、
+  关闭后拒写、非法对象和打开失败线程收口；CI 语法检查纳入新模块。Python **194 → 201**，
+  JS **127** 保持全绿。
+
+## v77（2026-09-17 · Codex）—— TargetContext 收拢热切换状态
+
+- **目标状态单一来源**：新增 `collector/target_context.py`，用线程安全
+  `TargetContext` 统一保存 package、process pattern、resolver、动态 pid、采集器集合和
+  generation；`main.py` 不再用散落闭包变量与外部锁拼接目标状态。
+- **跨代采样隔离**：worker 采样前领取采集器与 generation，完成后只允许当前代次发布；
+  主循环在同一原子操作中取得 mailbox 窗口和目标标签，热切换不会把慢返回结果标成新目标。
+- **错配守护修复**：mismatch 线程每轮读取当前 resolver/proc_name/pid；连续热切换后不再
+  引用启动时的旧 resolver，切到非微信目标时暂停 AppBrand 专属检查。
+- **兼容性**：CLI、JSONL schema、采样周期和报告口径均不变；温度采集器作为设备级实例
+  在目标切换时继续复用。
+- **测试/CI**：新增 6 项上下文回归，覆盖代次丢弃、原子标签、mailbox 清理、设备级采集器
+  复用、空包名防护和 resolver 动态 pid；CI 语法检查纳入新模块。Python **188 → 194**，
+  JS **127** 保持全绿。
+
+## v76（2026-09-17 · Codex）—— FPS 短窗精确聚合与报告展示
+
+- **架构边界前移**：`collector/sampling.py` 新增纯函数 `summarize_fps_windows()`，
+  聚合口径不再散落在 `main.py` 或前端，为后续 `SampleAggregator` 拆分提供稳定边界。
+- **Jank 精确合并**：SF/gfxinfo 采集结果新增 `jank_count` / `jank_total`；同一报告点
+  内多个 0.5 秒窗口按分子/分母合并，整份报告再按全部有效帧数加权，不做百分比平均。
+- **帧时间口径**：P95/Max 只对确有新增帧间隔的窗口取峰值，沿用旧帧时间的静止窗口
+  不重复计入。页面明确显示“短窗峰值”“帧加权”，避免把新口径伪装成旧指标。
+- **兼容性**：新值写入 `fps_window_summary`；顶层 `fps` 原字段不覆盖。旧 JSONL 无
+  summary 时，`fpsMetric()` 自动回退旧字段。CSV/XLSX 增加独立短窗列，不覆盖旧列。
+- **前端**：实时/历史/自包含报告的曲线、Pin 浮层、快照、统计栏和汇总卡统一读取
+  新口径；资源版本 **v66 → v67**。
+- **测试**：增加窗口加权、静止沿用排除、旧数据回退、导出字段和报告统计测试；
+  Python **184 → 188**，JS **113 → 127** 全绿。
+
+## v75（2026-09-17 · Codex）—— 保留 FPS/Jank 高频采样窗口
+
+- **改动**：新增 `collector/sampling.py` 的线程安全 `MetricMailbox`。各指标继续提供
+  现有 latest 快照，同时 FPS 的每个 0.5 秒结果进入有界 pending 队列；主循环每次
+  落盘原子 drain 为 `fps_windows`，包含递增 `seq`、真实 `sampled_t_ms` 和完整数据。
+- **兼容性**：顶层 `fps` 仍是最新快照，旧前端、CSV/XLSX 和历史读取逻辑不变；meta
+  新增 `schema_version: 2` 与 `fps_window_mode: "preserved"`。新字段为纯追加。
+- **防静默丢失**：队列上限 256（约 128 秒）；极端阻塞溢出时写入
+  `fps_windows_dropped`，而不是悄悄覆盖。目标热切换会清空旧窗口，并以 generation
+  丢弃切换前已启动但切换后才返回的旧目标采样。
+- **测试**：新增 `tests/test_sampling.py` 6 项，覆盖“前窗卡顿、后窗正常”仍同时保留、
+  drain/latest 语义、溢出计数、热切换清空、相对时间序列化和并发发布；Python **178 → 184**，
+  JS **113** 全绿。
+- **验证边界**：本轮先解决采集与 JSONL 层的不可逆丢失；报告如何展示/聚合多个短窗
+  将单独版本化，不在本轮用简单平均或无说明的最大值改变现有口径。
 
 ## v74（2026-09-17 · Codex）—— 修正内存健全性聚合与配置契约
 

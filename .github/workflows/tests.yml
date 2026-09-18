@@ -32,7 +32,12 @@ jobs:
             collector\main.py collector\web.py collector\adb.py `
             collector\pidresolver.py collector\probe.py collector\apk_label.py `
             collector\logcat.py collector\export_report.py collector\dashboard.py `
-            collector\data_health.py `
+            collector\data_health.py collector\sampling.py collector\target_context.py `
+            collector\target_monitor.py `
+            collector\jsonl_writer.py collector\runtime_health.py `
+            collector\capture_session.py collector\console_output.py `
+            collector\event_sink.py `
+            tools\check_consistency.py tools\browser_smoke_server.py `
             collector\metrics\fps.py collector\metrics\cpu.py `
             collector\metrics\mem.py collector\metrics\network.py `
             collector\metrics\thermal.py
@@ -40,6 +45,10 @@ jobs:
       - name: Python unit tests
         shell: pwsh
         run: python -m unittest discover -s tests -p "test_*.py"
+
+      - name: Project metadata consistency
+        shell: pwsh
+        run: python tools/check_consistency.py
 
       - uses: oven-sh/setup-bun@v2
 

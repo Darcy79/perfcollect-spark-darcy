@@ -13,13 +13,13 @@ Windows + adb 采集 FPS / CPU / 内存 / 网络 / 温度 → 本地 `jsonl` →
 
 ---
 
-## 2. 当前状态（截至 2026-09-17，v74）
+## 2. 当前状态（截至 2026-09-18，v88）
 
 | 项 | 值 |
 |---|---|
 | 仓库 / 分支 | https://github.com/Darcy79/perfdog-spark-darcy · `main` |
-| 前端资源版本 | **v66**（改前端必须升 `?v=`，`web/index.html` + `web/report.html` 各 3 处） |
-| 测试 | Python **178** 条（`tests/`）+ JS **113** 断言（`tests/test_nearest_cat.js`） |
+| 前端资源版本 | **v69**（改前端必须升 `?v=`，`web/index.html` + `web/report.html` 各 3 处） |
+| 测试 | Python **252** 条（`tests/`）+ JS **149** 断言（`tests/test_nearest_cat.js`） |
 | 最近变更 | `CHANGELOG.md`（**接手前必读最新 1~2 条**） |
 
 ---
@@ -44,11 +44,14 @@ uv run --no-project python main.py --web            # --duration 60 定时长；
 双击 start_dashboard.bat
 
 # 测试（在项目根执行）
-uv run --no-project python -m unittest discover -s tests -p "test_*.py"   # 应 178 条全绿
-C:\Users\SparkGame\.cherrystudio\bin\bun.exe tests/test_nearest_cat.js    # 应 113 断言全过
+uv run --no-project python -m unittest discover -s tests -p "test_*.py"   # 应 252 条全绿
+C:\Users\SparkGame\.cherrystudio\bin\bun.exe tests/test_nearest_cat.js    # 应 138 断言全过
 
 # JS 语法检查（沙箱内 bun/cmd 不能走管道 → 必须 Start-Process 重定向）
 C:\Users\SparkGame\.cherrystudio\bin\bun.exe build web/assets/app.js --outfile <临时文件>
+
+# 项目版本 / 测试数 / 前端资源版本一致性
+python tools/check_consistency.py
 ```
 
 - 工具路径：`uv` = `C:\Users\SparkGame\.cherrystudio\bin\uv.exe`；`bun` = `C:\Users\SparkGame\.cherrystudio\bin\bun.exe`；`adb` = `C:\platform-tools\adb.exe`
@@ -63,7 +66,7 @@ C:\Users\SparkGame\.cherrystudio\bin\bun.exe build web/assets/app.js --outfile <
 | **FPS** | `dumpsys SurfaceFlinger --latency`（layer 必须带 `#id`）→ 按相邻帧间隔 >0.5s 切段，取**帧数最多的主段**，(主段帧数−1)/主段时长；超物理上限被钳制（落盘 `fps_clamped`）、主段 <8 帧标低置信（`fps_warn="low_frames"`） |
 | **Jank** | 阈值 = **2×节奏×1.1**；节奏 = 新增帧间隔中位数吸附标准档 60/90/120/144Hz（10% 容差）；新增帧 <8 回退 2×refresh_ns。**局限**：卡顿占比 >50% 时中位数自掩蔽、可能低估 |
 | **帧时间 P50/P95/Max** | 只统计**新增帧**（0.5s 采样窗内新出现的帧） |
-| **汇总卡口径** | 帧时间 P95 = **各采样点 frame_p95_ms 的算术平均**；卡顿率 = **各点 jank_rate 的算术平均**（都**不是**全体帧口径） |
+| **汇总卡口径** | v76 新数据：Jank = `Σjank_count/Σjank_total` 帧加权；帧时间 P95 = 各报告点“0.5s 短窗 P95 峰值”的均值。旧 JSONL 自动回退原逐点均值口径 |
 | **网络** | **整机**流量（`/proc/pid/net/dev` 除 lo），非进程级 |
 | **内存** | `smaps_rollup` 同源优先 → 失败回退 `dumpsys meminfo`；**pid 解析失败时不回退包名维度**（宁可缺数） |
 | **pid 身份** | `/proc/<pid>/cmdline` 完整名优先 + `comm` 回退——Android `comm` 截断 15 字符，**荣耀 Android 14 取的是"末 15 字符"**（非标准首截断） |
@@ -96,9 +99,10 @@ FPS 与 Jank/帧时间的时间窗**故意不同**（FPS=滚动缓冲主段均�
 
 ## 8. 提交前自检清单
 
-- [ ] Python 测试全绿（`unittest discover`，当前应为 178 条）
-- [ ] JS 测试全绿（`bun tests/test_nearest_cat.js`，113 断言）
+- [ ] Python 测试全绿（`unittest discover`，当前应为 252 条）
+- [ ] JS 测试全绿（`bun tests/test_nearest_cat.js`，138 断言）
 - [ ] JS 语法检查通过（`bun build` app.js / 页面内联脚本）
+- [ ] `python tools/check_consistency.py` 通过
 - [ ] 改了前端 → `?v=` 已升、无旧版本号残留
 - [ ] 没有越界改其他成员的文件域
 - [ ] 没有 `git commit` / `git push`

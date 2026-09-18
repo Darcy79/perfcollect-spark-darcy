@@ -27,7 +27,7 @@ from metrics.cpu import CpuCollector
 from metrics.thermal import ThermalCollector
 from pidresolver import PidResolver
 from adb import Adb, AdbError
-from main import ChannelAlertTracker, row_has_any_value
+from runtime_health import ChannelAlertTracker, row_has_any_value
 from export_report import COLUMNS, flatten, extract_cores, data_rows, script_safe_json
 
 
@@ -272,6 +272,8 @@ class TestFpsSparseSegment(unittest.TestCase):
         r = c.sample(1.0)
         self.assertEqual(r["total_frames"], 128)
         self.assertEqual(r["fps"], 60.0)   # 127 ÷ (127×16.67ms)
+        self.assertEqual(r["jank_count"], 0)
+        self.assertEqual(r["jank_total"], 127)
 
     def test_main_segment_only_isolated_frame(self):
         """缓冲内每帧间隔都 >0.5s → 每段仅 1 帧 → 无可测节奏，FPS=0。"""
@@ -314,6 +316,10 @@ class TestExportFpsSource(unittest.TestCase):
     def test_columns_and_headers_aligned(self):
         keys = [k for k, _ in COLUMNS]
         self.assertIn("fps_source", keys)
+        self.assertIn("jank_rate_window", keys)
+        self.assertIn("frame_p95_window_peak_ms", keys)
+        self.assertIn("mem_age_ms", keys)
+        self.assertIn("therm_is_reused", keys)
         self.assertEqual(len(keys), len(set(keys)))          # 无重复列 key
         self.assertTrue(all(label for _, label in COLUMNS))  # 每列都有表头
 
@@ -332,6 +338,37 @@ class TestExportFpsSource(unittest.TestCase):
                                     "jank_rate": None, "error": "no_layer"}}
         self.assertEqual(flatten(err)["fps_source"], "")
         self.assertEqual(flatten({"t_ms": 0})["fps_source"], "")
+
+    def test_window_summary_is_exported_without_overwriting_legacy_columns(self):
+        row = {
+            "t_ms": 1000,
+            "fps": {"jank_rate": 0.0, "frame_p95_ms": 16.7},
+            "fps_window_summary": {
+                "window_count": 2,
+                "jank_rate": 0.25,
+                "frame_p95_peak_ms": 80.0,
+                "frame_max_peak_ms": 120.0,
+            },
+        }
+        flat = flatten(row)
+        self.assertEqual(flat["jank_rate"], 0.0)
+        self.assertEqual(flat["jank_rate_window"], 0.25)
+        self.assertEqual(flat["frame_p95_window_peak_ms"], 80.0)
+        self.assertEqual(flat["fps_window_count"], 2)
+
+    def test_metric_freshness_is_flattened(self):
+        flat = flatten({
+            "t_ms": 2000,
+            "metric_meta": {
+                "mem": {"seq": 3, "sampled_at_ms": 1500.0,
+                        "age_ms": 500.0, "is_reused": True},
+            },
+        })
+        self.assertEqual(flat["mem_seq"], 3)
+        self.assertEqual(flat["mem_sampled_at_ms"], 1500.0)
+        self.assertEqual(flat["mem_age_ms"], 500.0)
+        self.assertIs(flat["mem_is_reused"], True)
+        self.assertIsNone(flat["cpu_age_ms"])
 
 
 class TestCoresProbeAndMeta(unittest.TestCase):
@@ -490,6 +527,13 @@ class TestRunsMetaCount(unittest.TestCase):
             ],
         })
         self.assertEqual(got["c/x.jsonl"], 1)
+
+    def test_event_sidecar_is_not_a_report_run(self):
+        got = self._list_runs_for({
+            "d/x.jsonl": [{"t_ms": 0, "cpu": {}}],
+            "d/x.events.jsonl": [{"type": "jank", "t_ms": 0}],
+        })
+        self.assertEqual(got, {"d/x.jsonl": 1})
 
 
 class TestMemParsers(unittest.TestCase):

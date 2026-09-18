@@ -335,6 +335,123 @@ if (typeof computeCompleteness !== 'function') {
   eq(pixelToIdx(100, 40, 10, 56, 24), 0, 'pixelToIdx：usable<=0 退化输入');
 }
 
+// ---------------- FPS 短窗聚合读取（v76：新 schema 优先、旧数据兼容） ----------------
+{
+  const metric = window.PerfCharts.fpsMetric;
+  eq(typeof metric, 'function', 'fpsMetric：已导出');
+  const row = {
+    fps: { jank_rate: 0, frame_p95_ms: 16.7, frame_max_ms: 20 },
+    fps_window_summary: { jank_rate: 0.1667, frame_p95_peak_ms: 80, frame_max_peak_ms: 120 },
+  };
+  eq(metric(row, 'jank_rate'), 0.1667, 'fpsMetric：优先短窗加权 Jank');
+  eq(metric(row, 'frame_p95_ms'), 80, 'fpsMetric：优先短窗 P95 峰值');
+  eq(metric(row, 'frame_max_ms'), 120, 'fpsMetric：优先短窗 Max 峰值');
+  eq(metric({ fps: { jank_rate: 0.25 } }, 'jank_rate'), 0.25,
+     'fpsMetric：旧数据回退顶层字段');
+  eq(metric({}, 'jank_rate'), null, 'fpsMetric：缺失数据返回 null');
+
+  const stats = window.PerfCharts.computeStats([
+    { t_ms: 1000, fps: { fps: 50, jank_rate: 0, frame_p95_ms: 16.7 },
+      fps_window_summary: { window_count: 2, jank_count: 5, jank_total: 30,
+        jank_rate: 0.1667, frame_p95_peak_ms: 80 } },
+    { t_ms: 2000, fps: { fps: 60, jank_rate: 0, frame_p95_ms: 16.7 },
+      fps_window_summary: { window_count: 2, jank_count: 1, jank_total: 10,
+        jank_rate: 0.1, frame_p95_peak_ms: 40 } },
+  ]);
+  eq(stats.jank_avg, 15, 'computeStats：Jank 按帧数全局加权');
+  eq(stats.ft_p95_avg, 60, 'computeStats：短窗 P95 峰值再按报告点求均值');
+  eq(stats.fps_windowed, true, 'computeStats：标记短窗 schema');
+  eq(stats.jank_frame_weighted, true, 'computeStats：标记 Jank 帧加权口径');
+
+  const oldStats = window.PerfCharts.computeStats([
+    { t_ms: 1000, fps: { fps: 60, jank_rate: 0.1, frame_p95_ms: 16.7 } },
+    { t_ms: 2000, fps: { fps: 60, jank_rate: 0.3, frame_p95_ms: 33.3 } },
+  ]);
+  eq(oldStats.jank_avg, 20, 'computeStats：旧数据保持逐点 Jank 均值');
+  eq(oldStats.ft_p95_avg, 25, 'computeStats：旧数据保持逐点 P95 均值');
+  eq(oldStats.fps_windowed, false, 'computeStats：旧数据不误标短窗 schema');
+  eq(oldStats.jank_frame_weighted, false, 'computeStats：旧数据不误标帧加权');
+}
+
+// ---------------- 指标新鲜度（v79：统计排除重复 latest） ----------------
+{
+  const isFresh = window.PerfCharts.metricIsFresh;
+  eq(typeof isFresh, 'function', 'metricIsFresh：已导出');
+  eq(isFresh({}, 'mem'), true, 'metricIsFresh：旧数据默认按新采样兼容');
+  eq(isFresh({ metric_meta: { mem: { is_reused: false } } }, 'mem'), true,
+     'metricIsFresh：明确的新采样保留');
+  eq(isFresh({ metric_meta: { mem: { is_reused: true } } }, 'mem'), false,
+     'metricIsFresh：复用快照被排除');
+
+  const stats = window.PerfCharts.computeStats([
+    { t_ms: 1000, cpu: { cpu_proc_pct: 10 }, mem: { pss_kb: 102400 }, therm: { temp_c: 30 },
+      metric_meta: { cpu: { is_reused: false }, mem: { is_reused: false }, therm: { is_reused: false } } },
+    { t_ms: 2000, cpu: { cpu_proc_pct: 90 }, mem: { pss_kb: 102400 }, therm: { temp_c: 30 },
+      metric_meta: { cpu: { is_reused: false }, mem: { is_reused: true }, therm: { is_reused: true } } },
+    { t_ms: 3000, cpu: { cpu_proc_pct: 20 }, mem: { pss_kb: 307200 }, therm: { temp_c: 40 },
+      metric_meta: { cpu: { is_reused: false }, mem: { is_reused: false }, therm: { is_reused: false } } },
+  ]);
+  eq(stats.cpu_avg, 40, 'computeStats：CPU 使用三个新样本');
+  eq(stats.pss_avg, 200, 'computeStats：内存复用点不重复加权');
+  eq(stats.pss_peak, 300, 'computeStats：内存峰值仍取新采样最大值');
+  eq(stats.temp_avg, 35, 'computeStats：温度复用点不重复加权');
+  eq(stats.freshness_aware, true, 'computeStats：标记新鲜度 schema');
+
+  const oldStats = window.PerfCharts.computeStats([
+    { t_ms: 1000, mem: { pss_kb: 102400 } },
+    { t_ms: 2000, mem: { pss_kb: 307200 } },
+  ]);
+  eq(oldStats.pss_avg, 200, 'computeStats：旧 JSONL 仍统计全部报告点');
+  eq(oldStats.freshness_aware, false, 'computeStats：旧 JSONL 不误标新鲜度 schema');
+}
+
+// ---------------- 隐藏图表隔离（v88：FPS/帧时间全缺不中断报告） ----------------
+{
+  const oldDocument = globalThis.document;
+  const cards = {};
+  ['chart-fps', 'chart-frametime', 'chart-cpu', 'chart-mem', 'chart-net', 'chart-temp']
+    .forEach((id) => { cards[id] = { parentElement: { style: {} } }; });
+  globalThis.document = { getElementById: (id) => cards[id] || null };
+
+  function fakeChart() {
+    return {
+      setOptionCalls: 0,
+      resizeCalls: 0,
+      setOption() { this.setOptionCalls++; },
+      resize() { this.resizeCalls++; },
+    };
+  }
+  const charts = {
+    fps: fakeChart(), frametime: fakeChart(), cpu: fakeChart(),
+    mem: fakeChart(), net: fakeChart(), temp: fakeChart(),
+  };
+  const rows = [0, 1].map((i) => ({
+    t_ms: i * 1000,
+    fps: { error: 'gfx_unavailable' },
+    cpu: { cpu_total_pct: 30, cpu_proc_pct: 10 },
+    mem: { pss_kb: 102400 },
+    net: { rx_kbps: 1, tx_kbps: 1 },
+    therm: { temp_c: 35, power_w: 2 },
+  }));
+  window.PerfCharts.renderAll(charts, rows, { zoom: true });
+
+  eq(cards['chart-fps'].parentElement.style.display, 'none', '全缺 FPS：隐藏 FPS 卡片');
+  eq(cards['chart-frametime'].parentElement.style.display, 'none', '全缺帧时间：隐藏帧时间卡片');
+  eq(charts.fps.setOptionCalls, 0, '全缺 FPS：不对 0×0 隐藏图调用 setOption');
+  eq(charts.frametime.setOptionCalls, 0, '全缺帧时间：不对 0×0 隐藏图调用 setOption');
+  eq(charts.fps.resizeCalls, 0, '全缺 FPS：不 resize 隐藏图');
+  eq(charts.frametime.resizeCalls, 0, '全缺帧时间：不 resize 隐藏图');
+  eq(charts.cpu.setOptionCalls > 0, true, 'FPS 全缺时 CPU 仍正常渲染');
+  eq(charts.mem.setOptionCalls > 0, true, 'FPS 全缺时内存仍正常渲染');
+  eq(charts.net.setOptionCalls > 0, true, 'FPS 全缺时网络仍正常渲染');
+  eq(charts.temp.setOptionCalls > 0, true, 'FPS 全缺时温度仍正常渲染');
+  globalThis.document = oldDocument;
+
+  eq(window.PerfCharts._reasonText('gfx_unavailable'),
+     'gfxinfo 不支持该应用，已回退 SurfaceFlinger',
+     'gfx_unavailable：完整度卡片显示中文回退说明');
+}
+
 if (failures.length) {
   console.error(`[x] 断言失败 ${failures.length} 条（通过 ${passed}）：`);
   failures.forEach((f) => console.error('    - ' + f));

@@ -16,4 +16,5 @@ collector/output/
 share/
 
 # 其它
+.uv-cache/
 *.log

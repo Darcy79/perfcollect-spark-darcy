@@ -133,7 +133,7 @@ uv run --no-project python export_report.py --input output/20260812_164653/perfd
 uv run --with openpyxl python export_report.py --input output/20260812_164653/perfdog_20260812_164653.jsonl --format xlsx # Excel
 ```
 
-> xlsx 需要 openpyxl，用 `uv run --with openpyxl` 即可（零安装）。导出列：时间/FPS/Jank/帧时间P50·P95·Max/刷新率/CPU整机·进程/PSS·RSS/上下行速率/温度/功率/电流/电压。
+> xlsx 需要 openpyxl，用 `uv run --with openpyxl` 即可（零安装）。导出列：时间/FPS/Jank/帧时间P50·P95·Max/刷新率/CPU整机·进程/PSS·RSS/上下行速率/温度/功率/电流/电压；v76 新数据另含短窗聚合列，v79 为每类指标追加采样时刻、年龄、序号和复用标记，旧列保持不变。
 
 ## 常用参数
 

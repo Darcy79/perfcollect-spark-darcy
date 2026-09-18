@@ -399,8 +399,19 @@ class WebServer:
         return self._httpd.server_address[1]
 
     def stop(self):
-        if self._httpd:
-            self._httpd.shutdown()
+        # 先原子地摘除当前实例，使重复 stop() 成为无害操作；
+        # shutdown() 之后还必须 server_close() 才会真正释放监听 socket。
+        with self._lock:
+            httpd = self._httpd
+            thread = self._thread
+            self._httpd = None
+            self._thread = None
+        if httpd is None:
+            return
+        httpd.shutdown()
+        httpd.server_close()
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2)
 
     def _make_handler(self):
         server = self
@@ -446,7 +457,7 @@ class WebServer:
                 try:
                     payload = payload_fn()
                     self._send(200, json.dumps(payload, ensure_ascii=False))
-                except (BrokenPipeError, ConnectionResetError):
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                     raise
                 except Exception as e:
                     try:
@@ -633,7 +644,7 @@ class WebServer:
                             self.wfile.write(b": keepalive\n\n")
                         self.wfile.flush()
                         time.sleep(0.2)
-                except (BrokenPipeError, ConnectionResetError):
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                     pass  # 客户端断开，正常结束
 
             # ---------------- 内部 ----------------
@@ -731,7 +742,8 @@ class WebServer:
 
             def _rename_run(self, name, newname):
                 """为记录写备注（sidecar .remark.txt）。返回 (ok, err)。"""
-                if not name or not name.endswith(".jsonl"):
+                if (not name or not name.endswith(".jsonl")
+                        or name.endswith(".events.jsonl")):
                     return False, "bad name"
                 base = os.path.realpath(server.output_dir)
                 fp = os.path.realpath(os.path.join(base, name))
@@ -768,7 +780,10 @@ class WebServer:
                 if os.path.isdir(base):
                     for root, _, names in os.walk(base):
                         for fn in names:
-                            if not fn.endswith(".jsonl"):
+                            # *.events.jsonl 是 logcat 事件旁车文件，不是独立
+                            # 性能报告；列出它会让用户看到伪造的“2 个采样点”记录。
+                            if (not fn.endswith(".jsonl")
+                                    or fn.endswith(".events.jsonl")):
                                 continue
                             fp = os.path.join(root, fn)
                             rel = os.path.relpath(fp, base).replace("\\", "/")
@@ -828,7 +843,8 @@ class WebServer:
                     rp = fp + ".remark.txt"
                     if os.path.isfile(rp):
                         try:
-                            remark = open(rp, encoding="utf-8").read().strip()
+                            with open(rp, encoding="utf-8") as remark_file:
+                                remark = remark_file.read().strip()
                         except Exception:
                             pass
                     out.append({
@@ -843,7 +859,8 @@ class WebServer:
 
             def _load_events(self, name):
                 """读与报告同目录的 <name>.events.jsonl（logcat 事件标注）。"""
-                if not name or not name.endswith(".jsonl"):
+                if (not name or not name.endswith(".jsonl")
+                        or name.endswith(".events.jsonl")):
                     return []
                 base = os.path.realpath(server.output_dir)
                 fp = os.path.realpath(os.path.join(base, name.replace(".jsonl", ".events.jsonl")))
@@ -886,7 +903,8 @@ class WebServer:
 
             def _load_report(self, name):
                 # 允许子目录路径，但做防穿越校验：规范化后必须仍在 output 目录内
-                if not name or not name.endswith(".jsonl"):
+                if (not name or not name.endswith(".jsonl")
+                        or name.endswith(".events.jsonl")):
                     return {"error": "bad name"}
                 # name 来自 URL query（parse_qs 已解码）：超长/畸形值直接拒绝，
                 # 避免 join/realpath 对极端输入做无意义处理

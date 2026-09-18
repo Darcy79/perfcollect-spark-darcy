@@ -32,12 +32,21 @@ COLUMNS = [
     ("t_ms", "相对时间ms"), ("fps", "FPS"), ("jank_rate", "Jank率"),
     ("frame_p50_ms", "帧时间P50ms"), ("frame_p95_ms", "帧时间P95ms"),
     ("frame_max_ms", "帧时间Maxms"), ("refresh_hz", "刷新率Hz"),
+    ("jank_rate_window", "短窗合并Jank率"),
+    ("frame_p95_window_peak_ms", "短窗P95峰值ms"),
+    ("frame_max_window_peak_ms", "短窗Max峰值ms"),
+    ("fps_window_count", "FPS短窗数"), ("fps_windows_dropped", "FPS短窗丢弃数"),
     ("fps_source", "FPS通道"),
     ("cpu_total_pct", "CPU整机%"), ("cpu_proc_pct", "CPU进程%"),
     ("pss_mb", "PSS内存MB"), ("rss_mb", "RSS内存MB"),
     ("rx_kbps", "下行KB/s"), ("tx_kbps", "上行KB/s"),
     ("temp_c", "电池温度C"), ("power_w", "功率W"),
     ("current_ma", "电流mA"), ("voltage_v", "电压V"),
+    # v79：每个指标的真实采样时刻/年龄/序号/复用标记，便于外部分析去重。
+    *[(f"{metric}_{field}", f"{metric.upper()} {label}")
+      for metric in ("fps", "cpu", "mem", "net", "therm")
+      for field, label in (("sampled_at_ms", "采样时刻ms"), ("age_ms", "数据年龄ms"),
+                           ("seq", "采样序号"), ("is_reused", "是否复用"))],
     # v61：FPS 采集质量标记（fps.py v59 起落盘）——长测导出分析时，出现"已钳制/
     # 低置信"的点说明主段帧数过少或算出值超物理上限，应剔除或降权后再统计。
     # 追加在末尾，不改动原有列序（按列名取值/按表头读取的下游不受影响）。
@@ -110,6 +119,12 @@ def flatten(row):
     f = row.get("fps") or {}
     out.update({k: f.get(k) for k in ("fps", "jank_rate", "frame_p50_ms", "frame_p95_ms",
                                       "frame_max_ms", "refresh_hz")})
+    fs = row.get("fps_window_summary") or {}
+    out["jank_rate_window"] = fs.get("jank_rate")
+    out["frame_p95_window_peak_ms"] = fs.get("frame_p95_peak_ms")
+    out["frame_max_window_peak_ms"] = fs.get("frame_max_peak_ms")
+    out["fps_window_count"] = fs.get("window_count")
+    out["fps_windows_dropped"] = row.get("fps_windows_dropped")
     out["fps_source"] = fps_source(f)
     # v61：FPS 采集质量标记透出（钳制="是"；低置信沿用 fps_warn 原值如 low_frames）——
     # 无标记留空，便于在 Excel 里筛选"哪些点不可信"。
@@ -125,6 +140,11 @@ def flatten(row):
     t = row.get("therm") or {}
     out.update({"temp_c": t.get("temp_c"), "power_w": t.get("power_w"),
                 "current_ma": t.get("current_ma"), "voltage_v": t.get("voltage_v")})
+    metric_meta = row.get("metric_meta") or {}
+    for metric in ("fps", "cpu", "mem", "net", "therm"):
+        meta = metric_meta.get(metric) or {}
+        for field in ("sampled_at_ms", "age_ms", "seq", "is_reused"):
+            out[f"{metric}_{field}"] = meta.get(field)
     return out
 
 

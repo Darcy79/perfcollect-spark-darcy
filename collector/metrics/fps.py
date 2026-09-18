@@ -325,7 +325,8 @@ class FpsCollector:
         else:
             self._gfx_zero_streak = 0
         result = {"layer": self.layer, "total_frames": total, "fps": None,
-                  "jank_rate": None, "refresh_hz": None, "source": "gfxinfo"}
+                  "jank_rate": None, "jank_count": 0, "jank_total": 0,
+                  "refresh_hz": None, "source": "gfxinfo"}
         if self._gfx_last is not None:
             lt, ltotal, ljanky = self._gfx_last
             dt = ts - lt
@@ -333,7 +334,9 @@ class FpsCollector:
                 df = total - ltotal
                 if df > 0:
                     result["fps"] = round(df / dt, 2)
-                    result["jank_rate"] = round(max(janky - ljanky, 0) / df, 4)
+                    result["jank_count"] = max(janky - ljanky, 0)
+                    result["jank_total"] = df
+                    result["jank_rate"] = round(result["jank_count"] / df, 4)
                 elif df == 0:
                     result["fps"] = 0.0   # 静止：无新帧
         self._gfx_last = (ts, total, janky)
@@ -473,6 +476,7 @@ class FpsCollector:
                 return self._sample_gfx(ts)
 
         result = {"layer": self.layer, "total_frames": n, "fps": None, "jank_rate": None,
+                  "jank_count": 0, "jank_total": 0,
                   "refresh_hz": round(1e9 / self.refresh_ns, 1) if self.refresh_ns else None}
 
         # 新鲜度：以"缓冲最新帧时间戳是否推进"判断（帧时间戳与 uptime 基准不同，
@@ -531,6 +535,8 @@ class FpsCollector:
         if len(new_ts) >= 2:
             gaps = [new_ts[i] - new_ts[i - 1] for i in range(1, len(new_ts))]
             over = sum(1 for g in gaps if g > jank_threshold)
+            result["jank_count"] = over
+            result["jank_total"] = len(gaps)
             result["jank_rate"] = round(over / (len(new_ts) - 1), 4)
             # 帧时间分布（ms）：P50 / P95 / Max。P95 用 ceil(n*0.95)-1 取排序值，
             # 与前端统计栏口径统一（此前后端 int(n*0.95) 差一位次）

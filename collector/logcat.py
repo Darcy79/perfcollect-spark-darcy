@@ -92,13 +92,18 @@ class LogcatMonitor:
         self._thread.start()
         self.started = True
 
-    def stop(self):
+    def stop(self, timeout=1.0):
+        """请求停止并有限等待读流线程，重复调用安全。"""
         self._stop = True
         if self._proc:
             try:
                 self._proc.terminate()
             except Exception:
                 pass
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(max(0.0, float(timeout)))
+        self.started = False
 
     # ---------------- 事件消费 ----------------
     def get_events(self):

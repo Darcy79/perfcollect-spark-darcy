@@ -308,15 +308,36 @@
     var text = valid.map(function (it) { return it[1]; }).join(' · ');
     return text ? (text + (suffix || '')) : '';
   }
+  // v76：新数据优先使用 FPS 短窗聚合；旧 JSONL 无 summary 时保持原字段口径。
+  function fpsMetric(row, key) {
+    var f = row && row.fps ? row.fps : {};
+    var s = row && row.fps_window_summary ? row.fps_window_summary : {};
+    var summaryKey = null;
+    if (key === 'jank_rate') summaryKey = 'jank_rate';
+    else if (key === 'frame_p95_ms') summaryKey = 'frame_p95_peak_ms';
+    else if (key === 'frame_max_ms') summaryKey = 'frame_max_peak_ms';
+    if (summaryKey && typeof s[summaryKey] === 'number' && isFinite(s[summaryKey])) {
+      return s[summaryKey];
+    }
+    return (typeof f[key] === 'number' && isFinite(f[key])) ? f[key] : null;
+  }
+
+  function hasFpsWindowSummary(rows) {
+    return (rows || []).some(function (r) {
+      return r && r.fps_window_summary && r.fps_window_summary.window_count > 0;
+    });
+  }
+
   var _PIN_FIELDS = {
     'chart-fps':       function (r) { var f = r.fps || {}; return _pinSortParts([
       [f.fps, 'FPS ' + f.fps],
-      [f.jank_rate != null ? f.jank_rate * 100 : null, f.jank_rate != null ? 'Jank ' + (f.jank_rate * 100).toFixed(1) + '%' : null],
+      [fpsMetric(r, 'jank_rate') != null ? fpsMetric(r, 'jank_rate') * 100 : null,
+       fpsMetric(r, 'jank_rate') != null ? 'Jank ' + (fpsMetric(r, 'jank_rate') * 100).toFixed(1) + '%' : null],
     ]); },
     'chart-frametime': function (r) { var f = r.fps || {}; return _pinSortParts([
       [f.frame_p50_ms, 'P50 ' + f.frame_p50_ms + 'ms'],
-      [f.frame_p95_ms, 'P95 ' + f.frame_p95_ms + 'ms'],
-      [f.frame_max_ms, 'Max ' + f.frame_max_ms + 'ms'],
+      [fpsMetric(r, 'frame_p95_ms'), 'P95 ' + fpsMetric(r, 'frame_p95_ms') + 'ms'],
+      [fpsMetric(r, 'frame_max_ms'), 'Max ' + fpsMetric(r, 'frame_max_ms') + 'ms'],
     ]); },
     'chart-cpu':       function (r) { var c = r.cpu || {}; var ofTotal = (_cores && c.cpu_proc_pct != null) ? c.cpu_proc_pct / _cores : null; return _pinSortParts([
       [c.cpu_total_pct, '总 ' + c.cpu_total_pct + '%'],
@@ -360,10 +381,13 @@
     }
     var fpsG = [], ftG = [], cpuG = [], memG = [], netG = [], tempG = [];
     push(fpsG, f.fps, 'FPS ' + f.fps);
-    if (f.jank_rate != null) push(fpsG, f.jank_rate * 100, 'Jank ' + (f.jank_rate * 100).toFixed(1) + '%');
+    var jankRate = fpsMetric(row, 'jank_rate');
+    var frameP95 = fpsMetric(row, 'frame_p95_ms');
+    var frameMax = fpsMetric(row, 'frame_max_ms');
+    if (jankRate != null) push(fpsG, jankRate * 100, 'Jank ' + (jankRate * 100).toFixed(1) + '%');
     push(ftG, f.frame_p50_ms, 'P50 ' + f.frame_p50_ms + 'ms');
-    push(ftG, f.frame_p95_ms, 'P95 ' + f.frame_p95_ms + 'ms');
-    push(ftG, f.frame_max_ms, 'Max ' + f.frame_max_ms + 'ms');
+    push(ftG, frameP95, 'P95 ' + frameP95 + 'ms');
+    push(ftG, frameMax, 'Max ' + frameMax + 'ms');
     push(cpuG, c.cpu_total_pct, 'CPU总 ' + c.cpu_total_pct + '%');
     push(cpuG, c.cpu_proc_pct, 'CPU进程 ' + c.cpu_proc_pct + '%');
     if (_cores && c.cpu_proc_pct != null) push(cpuG, c.cpu_proc_pct / _cores, '占整机 ' + (c.cpu_proc_pct / _cores).toFixed(1) + '%');
@@ -735,6 +759,17 @@
   }
 
   function avg(arr) { var a = clean(arr); return a.length ? a.reduce(function (s, v) { return s + v; }, 0) / a.length : null; }
+
+  function metricIsFresh(row, key) {
+    var meta = row && row.metric_meta && row.metric_meta[key];
+    return !(meta && meta.is_reused === true);
+  }
+
+  function freshSeries(rows, key, getter) {
+    return series(rows, function (r) {
+      return metricIsFresh(r, key) ? getter(r) : null;
+    });
+  }
   // 极值用循环归约（不用 Math.min/max.apply：长报告数十万点时参数展开抛
   // RangeError: Maximum call stack size exceeded，导致统计栏整体崩溃）
   function min(arr) {
@@ -954,8 +989,10 @@
   function renderFps(chart, rows, zoom, idxArr) {
     var fps = series(rows, function (r) { return r.fps ? r.fps.fps : null; }, idxArr);
     var jank = series(rows, function (r) {
-      return r.fps && r.fps.jank_rate != null ? r.fps.jank_rate * 100 : null;
+      var v = fpsMetric(r, 'jank_rate');
+      return v != null ? v * 100 : null;
     }, idxArr);
+    var windowed = hasFpsWindowSummary(rows);
     // FPS y 轴上限 = 实际数据最高帧率向上取 20 的倍数（不设 120 地板）：
     // 设备能跑多少就显示多少——60Hz 划到 60，120Hz 划到 120，144Hz 划到 160，更高同理
     var top = max(fps) || 60;
@@ -965,7 +1002,7 @@
       ...baseOption(zoom),
       series: [
         Object.assign({}, baseLine, { name: 'FPS', data: fps, yAxisIndex: 0, color: COLORS.fps, lineStyle: { width: 1.6, color: COLORS.fps } }),
-        Object.assign({}, baseLine, { name: 'Jank%', data: jank, yAxisIndex: 1, color: COLORS.jank, lineStyle: { width: 1.2, color: COLORS.jank } }),
+        Object.assign({}, baseLine, { name: windowed ? 'Jank%(短窗合并)' : 'Jank%', data: jank, yAxisIndex: 1, color: COLORS.jank, lineStyle: { width: 1.2, color: COLORS.jank } }),
       ],
       yAxis: [
         { type: 'value', min: 0, max: maxFps, interval: step, axisLabel: { fontSize: 10 } },
@@ -977,16 +1014,17 @@
 
   function renderFrameTime(chart, rows, zoom, idxArr) {
     var p50 = series(rows, function (r) { return r.fps ? r.fps.frame_p50_ms : null; }, idxArr);
-    var p95 = series(rows, function (r) { return r.fps ? r.fps.frame_p95_ms : null; }, idxArr);
-    var mx = series(rows, function (r) { return r.fps ? r.fps.frame_max_ms : null; }, idxArr);
+    var p95 = series(rows, function (r) { return fpsMetric(r, 'frame_p95_ms'); }, idxArr);
+    var mx = series(rows, function (r) { return fpsMetric(r, 'frame_max_ms'); }, idxArr);
+    var windowed = hasFpsWindowSummary(rows);
     chart.setOption({
       ...baseOption(zoom),
       yAxis: { type: 'value', name: 'ms', nameLocation: 'middle', nameGap: 36,
                min: 0, axisLabel: { fontSize: 10 } },
       series: [
         Object.assign({}, baseLine, { name: 'P50', data: p50, color: COLORS.p50, lineStyle: { width: 1.4, color: COLORS.p50 } }),
-        Object.assign({}, baseLine, { name: 'P95', data: p95, color: COLORS.p95, lineStyle: { width: 1.6, color: COLORS.p95 } }),
-        Object.assign({}, baseLine, { name: 'Max', data: mx, color: COLORS.max, lineStyle: { width: 1.2, color: COLORS.max } }),
+        Object.assign({}, baseLine, { name: windowed ? 'P95(短窗峰值)' : 'P95', data: p95, color: COLORS.p95, lineStyle: { width: 1.6, color: COLORS.p95 } }),
+        Object.assign({}, baseLine, { name: windowed ? 'Max(短窗峰值)' : 'Max', data: mx, color: COLORS.max, lineStyle: { width: 1.2, color: COLORS.max } }),
       ],
     });
   }
@@ -1115,11 +1153,20 @@
     if (netVisible && charts.net) renderNet(charts.net, rows, zoom, idxArr);
     if (tempVisible && charts.temp) renderTemp(charts.temp, rows, zoom, idxArr);
 
-    applyTime(charts, rows, ['fps', 'frametime', 'cpu', 'mem', 'net', 'temp'], idxArr);
+    // 只操作当前可见图表。ECharts 在 display:none 的 0×0 容器上重建类目轴时
+    // 可能拿不到 coordinateSystem 并抛错，进而中断后续统计/汇总/完整度渲染。
+    var visibleChartIds = [];
+    if (fpsVisible) visibleChartIds.push('fps');
+    if (frameVisible) visibleChartIds.push('frametime');
+    if (cpuVisible) visibleChartIds.push('cpu');
+    if (memVisible) visibleChartIds.push('mem');
+    if (netVisible) visibleChartIds.push('net');
+    if (tempVisible) visibleChartIds.push('temp');
+    applyTime(charts, rows, visibleChartIds, idxArr);
 
     // 关键：渲染后强制 resize，按当前容器实际宽度铺满（容器从隐藏转显示 / 窗口变化时
     // 若不 resize，echarts 会沿用旧宽度导致曲线只占左半边、右侧空白）
-    ['fps', 'frametime', 'cpu', 'mem', 'net', 'temp'].forEach(function (k) {
+    visibleChartIds.forEach(function (k) {
       var c = charts[k];
       if (c) c.resize();
     });
@@ -1130,51 +1177,65 @@
     function put(id, text) { var el = document.getElementById(id); if (el) el.textContent = text; }
     // v61：FPS 统计栏附带缺数构成——区分"链路读取失败(probe_fail)"与"无渲染层(no_layer)"，
     // 避免只看到一条空白曲线却不知道缺了多少点、为什么缺（2026-09-11 事故复盘）
-    put('stat-fps', 'FPS ' + statText(series(rows, function (r) { return r.fps ? r.fps.fps : null; }), '') + fpsMissingNote(rows));
-    put('stat-frametime', '帧时间P95 ' + statText(series(rows, function (r) { return r.fps ? r.fps.frame_p95_ms : null; }), 'ms', 1));
-    put('stat-cpu', '进程CPU ' + statText(series(rows, function (r) { return r.cpu ? r.cpu.cpu_proc_pct : null; }), '%'));
-    put('stat-mem', 'PSS ' + statText(series(rows, function (r) { return r.mem && r.mem.pss_kb != null ? r.mem.pss_kb / 1024 : null; }), ' MB'));
-    put('stat-net', '下行 ' + statText(series(rows, function (r) { return r.net ? r.net.rx_kbps : null; }), 'KB/s', 1));
-    put('stat-temp', '温度 ' + statText(series(rows, function (r) { return r.therm ? r.therm.temp_c : null; }), '°C', 1));
+    put('stat-fps', 'FPS ' + statText(freshSeries(rows, 'fps', function (r) { return r.fps ? r.fps.fps : null; }), '') + fpsMissingNote(rows));
+    put('stat-frametime', (hasFpsWindowSummary(rows) ? '帧时间P95(短窗峰值) ' : '帧时间P95 ') +
+        statText(freshSeries(rows, 'fps', function (r) { return fpsMetric(r, 'frame_p95_ms'); }), 'ms', 1));
+    put('stat-cpu', '进程CPU ' + statText(freshSeries(rows, 'cpu', function (r) { return r.cpu ? r.cpu.cpu_proc_pct : null; }), '%'));
+    put('stat-mem', 'PSS ' + statText(freshSeries(rows, 'mem', function (r) { return r.mem && r.mem.pss_kb != null ? r.mem.pss_kb / 1024 : null; }), ' MB'));
+    put('stat-net', '下行 ' + statText(freshSeries(rows, 'net', function (r) { return r.net ? r.net.rx_kbps : null; }), 'KB/s', 1));
+    put('stat-temp', '温度 ' + statText(freshSeries(rows, 'therm', function (r) { return r.therm ? r.therm.temp_c : null; }), '°C', 1));
   }
 
   // ---------------- 统计汇总 ----------------
   function computeStats(rows) {
-    var fps = series(rows, function (r) { return r.fps ? r.fps.fps : null; });
+    var fps = freshSeries(rows, 'fps', function (r) { return r.fps ? r.fps.fps : null; });
     // v48（UI优化 4.6）：静止段（fps==0，合法画面非性能问题）不入"最低帧率"统计
-    var fpsActive = series(rows, function (r) {
+    var fpsActive = freshSeries(rows, 'fps', function (r) {
       var v = r.fps ? r.fps.fps : null;
       return (typeof v === 'number' && isFinite(v) && v > 0) ? v : null;
     });
-    var jank = series(rows, function (r) {
-      return r.fps && r.fps.jank_rate != null ? r.fps.jank_rate * 100 : null;
+    var jank = freshSeries(rows, 'fps', function (r) {
+      var v = fpsMetric(r, 'jank_rate');
+      return v != null ? v * 100 : null;
     });
-    var ftP95 = series(rows, function (r) { return r.fps ? r.fps.frame_p95_ms : null; });
-    var cpuProc = series(rows, function (r) { return r.cpu ? r.cpu.cpu_proc_pct : null; });
-    var pss = series(rows, function (r) {
+    var ftP95 = freshSeries(rows, 'fps', function (r) { return fpsMetric(r, 'frame_p95_ms'); });
+    var cpuProc = freshSeries(rows, 'cpu', function (r) { return r.cpu ? r.cpu.cpu_proc_pct : null; });
+    var pss = freshSeries(rows, 'mem', function (r) {
       return r.mem && r.mem.pss_kb != null ? r.mem.pss_kb / 1024 : null;
     });
-    var temp = series(rows, function (r) { return r.therm ? r.therm.temp_c : null; });
+    var temp = freshSeries(rows, 'therm', function (r) { return r.therm ? r.therm.temp_c : null; });
     var durS = rows.length ? Math.round((rows[rows.length - 1].t_ms || 0) / 1000) : 0;
     // v48（UI优化 1.1）：众数刷新率 → KPI 分级的"满帧 / 帧时间阈值"基准（无则 60）
     var hzCount = {};
     rows.forEach(function (r) {
+      if (!metricIsFresh(r, 'fps')) return;
       var f = r.fps && r.fps.refresh_hz;
       if (typeof f === 'number' && isFinite(f)) hzCount[f] = (hzCount[f] || 0) + 1;
     });
     var refresh_hz = null, bestCnt = 0;
+    var jankCount = 0, jankTotal = 0;
+    rows.forEach(function (r) {
+      var s = r && r.fps_window_summary;
+      if (s && typeof s.jank_count === 'number' && typeof s.jank_total === 'number' && s.jank_total > 0) {
+        jankCount += s.jank_count;
+        jankTotal += s.jank_total;
+      }
+    });
     Object.keys(hzCount).forEach(function (k) {
       if (hzCount[k] > bestCnt) { bestCnt = hzCount[k]; refresh_hz = Number(k); }
     });
     return {
       count: rows.length, durS: durS,
       fps_avg: avg(fps), fps_min: min(fps), fps_min_active: min(fpsActive), fps_p95: p95(fps),
-      jank_avg: avg(jank),
+      jank_avg: jankTotal > 0 ? jankCount / jankTotal * 100 : avg(jank),
       ft_p95_avg: avg(ftP95),
       cpu_avg: avg(cpuProc),
       pss_peak: max(pss), pss_avg: avg(pss),
       temp_avg: avg(temp),
       refresh_hz: refresh_hz,
+      fps_windowed: hasFpsWindowSummary(rows),
+      jank_frame_weighted: jankTotal > 0,
+      freshness_aware: rows.some(function (r) { return r && r.metric_meta; }),
     };
   }
 
@@ -1224,15 +1285,15 @@
     el.innerHTML =
       // 核心 KPI 置顶（大卡 + 阈值着色）——第一眼回答"这次测得好不好"
       build('平均帧率', fmt(stats.fps_avg, 1), '/ 满帧 ' + hz, fpsGrade(stats.fps_avg), true) +
-      build('卡顿率（均值）', fmt(stats.jank_avg, 2), '%', jankGrade(stats.jank_avg), true) +
-      build('帧时间 P95（均值）', fmt(stats.ft_p95_avg, 1), 'ms', ftGrade(stats.ft_p95_avg), true) +
+      build(stats.jank_frame_weighted ? '卡顿率（帧加权）' : '卡顿率（均值）', fmt(stats.jank_avg, 2), '%', jankGrade(stats.jank_avg), true) +
+      build(stats.fps_windowed ? '帧时间 P95（短窗峰值均值）' : '帧时间 P95（均值）', fmt(stats.ft_p95_avg, 1), 'ms', ftGrade(stats.ft_p95_avg), true) +
       // 次要指标
       build('最低帧率(除静止)', fmt(fpsMinActive, 1), 'FPS') +
       build('P95 帧率', fmt(stats.fps_p95, 1), 'FPS') +
-      build('平均进程CPU', fmt(stats.cpu_avg, 1), '%') +
+      build(stats.freshness_aware ? '平均进程CPU（新采样）' : '平均进程CPU', fmt(stats.cpu_avg, 1), '%') +
       build('峰值内存', fmt(stats.pss_peak, 1), 'MB (PSS)') +
-      build('平均内存', fmt(stats.pss_avg, 1), 'MB (PSS)') +
-      build('平均温度', fmt(stats.temp_avg, 1), '°C', tempGrade(stats.temp_avg));
+      build(stats.freshness_aware ? '平均内存（新采样）' : '平均内存', fmt(stats.pss_avg, 1), 'MB (PSS)') +
+      build(stats.freshness_aware ? '平均温度（新采样）' : '平均温度', fmt(stats.temp_avg, 1), '°C', tempGrade(stats.temp_avg));
     // v49（需求 A）：删除"采集时长"元信息卡——时长/点数已移到报告标题行
     // （report.html selectRun 内拼入 meta-primary），汇总卡区不再显示，避免换行难看。
   }
@@ -1280,6 +1341,7 @@
   // 缺数原因码 → 人话（与采集端错误码一一对应，见 指标说明.md「一、1」「十」）
   var COMPLETENESS_REASONS = {
     probe_fail: '链路读取失败',
+    gfx_unavailable: 'gfxinfo 不支持该应用，已回退 SurfaceFlinger',
     no_layer: '无渲染层(不在前台)',
     layer_read_fail: '渲染层失效',
     read_fail: '读取失败',
@@ -1509,6 +1571,8 @@
     nearestCat: nearestCat,   // 纯函数，导出供 tests/test_nearest_cat.js 断言
     pixelToIdx: pixelToIdx,   // v66：grid-aware 像素 → 显示索引（纯函数，供回归测试）
     idxToPixel: idxToPixel,   // v66：显示索引 → grid 内像素（与 pixelToIdx 同一套数学）
+    fpsMetric: fpsMetric,     // v76：新 schema 短窗聚合优先、旧数据字段回退（纯函数）
+    metricIsFresh: metricIsFresh, // v79：重复 latest 快照不重复进入统计
     setCores: setCores,       // 注入核数（实时看板 /api/status；历史报告 meta 行）
     prepareRows: prepareRows, // 清洗 event 行 + 抽取核数/设备信息（历史报告/导出 HTML 用）
     deviceInfoLines: deviceInfoLines,   // 设备信息 → 结构化行数组（历史看板分行渲染）
@@ -1524,6 +1588,7 @@
     renderCompleteness: renderCompleteness,
     markCompleteness: markCompleteness,
     completenessGrade: completenessGrade,
+    _reasonText: _reasonText,   // 纯函数，供错误码文案回归测试
     _statText: statText,
   };
 })();
