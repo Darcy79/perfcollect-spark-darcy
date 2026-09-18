@@ -55,7 +55,9 @@ def check():
     agents = _read("AGENTS.md")
     architecture = _read("架构设计.md")
     memory = _read("开发交接记忆-20260917.md")
-    assessment = _read("项目评估与优化待办-20260917.md")
+    # 注：项目评估与优化待办-20260917.md 是本机维护、未纳入版本库的文档，不能作为
+    # CI 门禁的输入——干净检出里不存在该文件，会让门禁直接抛 FileNotFoundError
+    # （2026-09-18 CI 实际失败原因）。门禁只校验已入库的状态文档。
 
     changelog_version = _match(
         changelog, r"## 当前状态（[^，]+，(v[0-9.]+)）",
@@ -90,16 +92,12 @@ def check():
     memory_counts = _match(
         memory, r"回归基线：Python (\d+) 项、JS (\d+) 项",
         "交接记忆测试数", errors)
-    assessment_counts = _match(
-        assessment, r"本轮修改后：Python (\d+) 项、JS (\d+) 项",
-        "优化待办测试数", errors)
 
     python_counts = {"实际 discovery": str(count_python_tests())}
     js_counts = {}
     for label, counts in (
         ("CHANGELOG", changelog_counts), ("AGENTS", agents_counts),
         ("架构设计", architecture_counts), ("交接记忆", memory_counts),
-        ("优化待办", assessment_counts),
     ):
         if counts:
             python_counts[label] = counts[0]
