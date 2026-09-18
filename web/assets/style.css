@@ -1,4 +1,4 @@
-/* 自研 PerfDog Web 看板样式 */
+/* 自研 PerfCollect Web 看板样式 */
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
@@ -140,7 +140,7 @@ main { flex: 1; padding: 16px 20px; display: flex; flex-direction: column; gap: 
 }
 .hint-card.show { display: block; }
 .hint-card b { color: #4fc3f7; font-weight: 600; }
-/* 自定义时间拖动条（PerfDog 风格 v28）：体积小、按下即拖 */
+/* 自定义时间拖动条（PerfCollect 风格 v28）：体积小、按下即拖 */
 .pd-slider { position: relative; height: 14px; margin-top: 5px; background: #101a26; border: 1px solid #263545; border-radius: 4px; user-select: none; touch-action: none; cursor: default; }
 .pd-wave { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
 .pd-selection { position: absolute; top: 1px; bottom: 1px; background: rgba(79,195,247,.28); border-left: 1px solid #4fc3f7; border-right: 1px solid #4fc3f7; border-radius: 2px; cursor: grab; }

@@ -12,7 +12,7 @@ from web import WebServer
 
 
 def main():
-    ap = argparse.ArgumentParser(description="PerfDog-CN 历史看板（无需手机）")
+    ap = argparse.ArgumentParser(description="PerfCollect-CN 历史看板（无需手机）")
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--output", default="output")
     args = ap.parse_args()

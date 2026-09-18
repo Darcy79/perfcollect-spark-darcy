@@ -1,4 +1,4 @@
-# 自研 PerfDog 采集器（FPS / CPU / 内存 / 网络 / 温度）
+# 自研 PerfCollect 采集器（FPS / CPU / 内存 / 网络 / 温度）
 
 微信小游戏真机性能采集工具。Windows + USB 安卓真机，ADB 采集，数据本地 JSONL 落盘，**不传云端**。
 
@@ -7,15 +7,15 @@
 ## 获取
 
 **方式 A：拿分发包（zip，推荐给不写代码的同事）**
-1. 向维护者要最新分发包 `perfdog-cn-<版本>-<日期>.zip`（由 `make_zip.bat` 生成）
-2. 解压到任意路径（**建议英文路径**，例如 `D:\perfdog`）→ 双击 `start_perfdog.bat`
+1. 向维护者要最新分发包 `perfcollect-cn-<版本>-<日期>.zip`（由 `make_zip.bat` 生成）
+2. 解压到任意路径（**建议英文路径**，例如 `D:\perfcollect`）→ 双击 `start_perfcollect.bat`
 3. 需要 uv 或 Python（见下方「没有 Python？」）；包内 `先读我-使用说明.md` 有 3 步上手
 
 **方式 B：源码运行（开发者）**
 ```bash
-git clone https://github.com/Darcy79/perfdog-spark-darcy.git
-cd perfdog-spark-darcy
-# 双击 start_perfdog.bat（自动用 uv 跑，无需装 Python）；或：
+git clone https://github.com/Darcy79/perfcollect-spark-darcy.git
+cd perfcollect-spark-darcy
+# 双击 start_perfcollect.bat（自动用 uv 跑，无需装 Python）；或：
 cd collector && uv run --no-project python main.py --web
 ```
 
@@ -29,9 +29,9 @@ cd collector && uv run --no-project python main.py --web
 
 | 步骤 | 操作 | 成功标志 |
 |---|---|---|
-| 1. 安装 | 拿分发包 zip 解压（或 clone 源码双击 `start_perfdog.bat`） | — |
+| 1. 安装 | 拿分发包 zip 解压（或 clone 源码双击 `start_perfcollect.bat`） | — |
 | 2. 连真机 | 手机开 USB 调试连电脑，`adb devices` 看到 `xxx device`；手机打开被测小游戏**保持前台** | 命令行列出设备 |
-| 3. 启动 | 双击 `start_perfdog.bat`（自动开浏览器看板） | 控制台打印「目标进程 … pid=xxxx」「CPU 核数」「设备: …」 |
+| 3. 启动 | 双击 `start_perfcollect.bat`（自动开浏览器看板） | 控制台打印「目标进程 … pid=xxxx」「CPU 核数」「设备: …」 |
 | 4. 看板 | 浏览器看实时曲线；顶部下拉可热切换被测应用 | FPS/CPU/内存曲线在动，状态栏"采集中" |
 | 5. 停止 | 看板点「⏹ 停止采集」或控制台 Ctrl+C 一次 | 提示已生成 HTML 报告 |
 | 6. 报告在哪 | 状态栏"数据:"一行有目录：`collector/output/<时间戳>/`（jsonl + 自包含 HTML）；历史报告页 `http://localhost:8080/report.html` 随时回看 | 双击 HTML 即看完整报告 |
@@ -43,7 +43,7 @@ cd collector && uv run --no-project python main.py --web
 
 | 文件 | 作用 |
 |---|---|
-| `start_perfdog.bat` | **双击启动**采集 + Web 看板（自动定位目录、自动开浏览器） |
+| `start_perfcollect.bat` | **双击启动**采集 + Web 看板（自动定位目录、自动开浏览器） |
 | `start_dashboard.bat` | **双击查看历史报告**（无需手机，数据在本地 jsonl） |
 
 > 首次运行 bat 会自动用 uv 下载 Python（1 分钟左右），之后即用即开。
@@ -56,11 +56,11 @@ cd collector && uv run --no-project python main.py --web
 ```
 collector/output/
 ├── 20260812_164653/                  ← 按时间命名的采集文件夹
-│   ├── perfdog_20260812_164653.jsonl ← 原始数据（每行一个采样点）
-│   └── perfdog_20260812_164653.html  ← 自包含 HTML 报告（双击即看，自动生成）
+│   ├── perfcollect_20260812_164653.jsonl ← 原始数据（每行一个采样点）
+│   └── perfcollect_20260812_164653.html  ← 自包含 HTML 报告（双击即看，自动生成）
 ├── 20260812_170001/
-│   ├── perfdog_20260812_170001.jsonl
-│   └── perfdog_20260812_170001.html
+│   ├── perfcollect_20260812_170001.jsonl
+│   └── perfcollect_20260812_170001.html
 └── ...                                ← 每次采集都新增一个文件夹，不覆盖旧数据
 ```
 
@@ -128,9 +128,9 @@ uv run --no-project python main.py
 
 ```bash
 # 在 collector 目录下
-uv run --no-project python export_report.py --input output/20260812_164653/perfdog_20260812_164653.jsonl --format html   # 自包含 HTML 报告
-uv run --no-project python export_report.py --input output/20260812_164653/perfdog_20260812_164653.jsonl --format csv    # CSV（Excel 直接打开）
-uv run --with openpyxl python export_report.py --input output/20260812_164653/perfdog_20260812_164653.jsonl --format xlsx # Excel
+uv run --no-project python export_report.py --input output/20260812_164653/perfcollect_20260812_164653.jsonl --format html   # 自包含 HTML 报告
+uv run --no-project python export_report.py --input output/20260812_164653/perfcollect_20260812_164653.jsonl --format csv    # CSV（Excel 直接打开）
+uv run --with openpyxl python export_report.py --input output/20260812_164653/perfcollect_20260812_164653.jsonl --format xlsx # Excel
 ```
 
 > xlsx 需要 openpyxl，用 `uv run --with openpyxl` 即可（零安装）。导出列：时间/FPS/Jank/帧时间P50·P95·Max/刷新率/CPU整机·进程/PSS·RSS/上下行速率/温度/功率/电流/电压；v76 新数据另含短窗聚合列，v79 为每类指标追加采样时刻、年龄、序号和复用标记，旧列保持不变。
@@ -204,17 +204,17 @@ python main.py --package com.example.game --process-pattern "" --web
 
 ## 埋点 SDK（小游戏引擎级指标，骨架）
 
-`..\sdk\perfdog-sdk.js` 为小游戏内嵌埋点 SDK 骨架（Laya 版）：
+`..\sdk\perfcollect-sdk.js` 为小游戏内嵌埋点 SDK 骨架（Laya 版）：
 - 挂钩 `Laya.Stat` 读引擎级指标：DrawCall / 三角面 / GPU 内存 / 节点数（多级降级读取）
 - rAF 包裹采样：帧间隔分布、JS 主线程忙占比、卡顿帧计数
 - `scene()` / `mark()` 场景与关键节点打点，时间戳 `t_ms` 与采集器对齐
-- 数据写本地文件（`wx.env.USER_DATA_PATH/perfdog_sdk.jsonl`）
+- 数据写本地文件（`wx.env.USER_DATA_PATH/perfcollect_sdk.jsonl`）
 
-接入与数据回传方式见 `..\sdk\perfdog-sdk.js` 文件头注释与架构文档 §5。
+接入与数据回传方式见 `..\sdk\perfcollect-sdk.js` 文件头注释与架构文档 §5。
 
 ## 输出文件
 
-采集数据位于 `output/<时间戳>/perfdog_<时间戳>.jsonl`，每行一个采样点（JSON）：
+采集数据位于 `output/<时间戳>/perfcollect_<时间戳>.jsonl`，每行一个采样点（JSON）：
 
 ```json
 {"ts": 1723412345.678, "t_ms": 1234.5, "fps": {"total_frames": 126, "fps": 59.86, "jank_rate": 0.0, "frame_p50_ms": 16.7, "frame_p95_ms": 16.8, "frame_max_ms": 17.0, "refresh_hz": 60.0}, "cpu": {"pid": 12345, "cpu_total_pct": 12.3, "cpu_proc_pct": 8.5}, "mem": {"pid": 12345, "pss_kb": 234567, "vmrss_kb": 345678}, "net": {"rx_kbps": 7.8, "tx_kbps": 1.7}, "therm": {"temp_c": 36.0, "current_ma": null, "voltage_v": 4.12, "power_w": null}}
@@ -247,7 +247,7 @@ python main.py --package com.example.game --process-pattern "" --web
 - **`未找到 com.tencent.mm 的进程`**：确认小游戏已打开且在**前台**（回到桌面或锁屏会掉）。
 - **FPS 显示"无渲染层(游戏请在微信前台)"**：小游戏没在前台。微信小游戏的 WebGL 渲染层（SurfaceView）在退后台时会被系统销毁，回游戏前台即自动恢复。
 - **FPS 一直为 `-`/0**：微信小游戏的 WebGL 渲染走 SurfaceView，`dumpsys gfxinfo` 采不到帧（已实测确认），采集器改用 **SurfaceFlinger 帧统计**（`--latency` 按渲染层读取，PerfDog 同思路）。**静止画面 FPS=0 是正常的**（画面没变化就不提交新帧）；游戏操作/战斗时才有帧率。若一直 0，确认游戏真的在渲染画面。
-- **FPS 上限 / 高刷新率**：采集器**没有帧率上限**（90/120/144Hz 都能采），看板 FPS 图会自动放缩。游戏帧率上限 = 手机当前屏幕刷新率（如 60Hz 屏游戏最多 60fps）；想看高帧率，在手机系统设置里把屏幕刷新率调到 90/120/144Hz，游戏会随之解锁。
+- **FPS 上限 / 高刷新率**：采集器支持 90/120/144Hz；为防极少帧样本算出非物理高值，会按“有效刷新率×1.5”做保护性钳制（刷新率异常时兜底 240FPS），并落盘 `fps_clamped=true`。正常游戏上屏帧率上限 = 手机当前屏幕刷新率；看板 FPS 图会自动放缩。
 - **Jank 率口径**：帧间隔超过 **2×实际呈现节奏×1.1** 算卡顿帧（节奏 = 帧间隔中位数吸附标准档 60/90/120/144Hz；游戏锁 60fps → 阈值 36.7ms）。旧版按面板刷新周期判定，高刷面板 + 锁帧游戏会误报 70~100% 假 Jank，已修复（详见 `指标说明.md`「一、2」）。
 - **温度/功耗显示为空**：部分机型电池节点需 root（荣耀 `/sys` 节点即如此），工具已自动降级 `dumpsys battery` 读温度/电压；电流节点多数机型读不到，属正常。看板会隐藏无数据的图表。
 - **CPU 进程占用为 0**：首次采样为基准点（差值算法需两个点），下一轮即有值。
@@ -286,6 +286,7 @@ python main.py --package com.example.game --process-pattern "" --web
 
 ## 下一步
 
-1. 埋点 SDK 真机联调（`sdk/perfdog-sdk.js`，Laya 版骨架，待验证 release 版统计项可用性后按 `t_ms` 合并数据）
-2. 换机验收扩充 `devices.md`（微信多开/分屏、高刷切档、30min+ 长测等待验证场景，见 devices.md「待验证场景」）
-3. 数据健全性自检阈值按新机型回归（见 devices.md「阈值过拟合提醒」）
+1. 对 48 分钟长测发现的后半程 FPS 回落做固定场景循环复测，区分热降频、场景负载与内存累积。
+2. 换机验收扩充 `devices.md`（微信多开/分屏、专项高刷切档）。
+3. 与官方 PerfDog 做同场景对拍，先固化口径差异，再评估核心算法影子计算方案。
+4. 数据健全性自检阈值按新机型回归（见 devices.md「阈值过拟合提醒」）。SDK 按当前安排继续置后。

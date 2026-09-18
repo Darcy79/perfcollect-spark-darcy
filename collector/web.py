@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""自研 PerfDog — Web 看板服务端（纯 Python 标准库，本地运行不传云端）
+"""自研 PerfCollect — Web 看板服务端（纯 Python 标准库，本地运行不传云端）
 
 与 main.py 集成：main.py 传入 --web 后，采集循环每采一点调用
 web.add_sample(row)，页面通过轮询 /api/latest 实时刷新。
@@ -526,7 +526,7 @@ class WebServer:
                     name = (qs.get("name") or [""])[0]
                     self._send_json_api(lambda: self._load_report(name))
                 elif path == "/api/events":
-                    # logcat 事件标注（模式1：与报告同目录的 perfdog_xxx.events.jsonl）
+                    # logcat 事件标注（模式1：与报告同目录的 perfcollect_xxx.events.jsonl）
                     qs = parse_qs(parsed.query)
                     name = (qs.get("name") or [""])[0]
                     self._send_json_api(lambda: self._load_events(name))
@@ -693,7 +693,7 @@ class WebServer:
                 force=True（?force=1，刷新按钮用）绕过缓存强制重新扫描。
                 """
                 if not server.adb:
-                    return {"ok": False, "apps": [], "error": "离线看板无设备连接，请用 start_perfdog.bat 启动采集"}
+                    return {"ok": False, "apps": [], "error": "离线看板无设备连接，请用 start_perfcollect.bat 启动采集"}
                 serial = server.adb.serial
                 if force:
                     server._apps_cache.pop(serial, None)
@@ -733,7 +733,7 @@ class WebServer:
                 if not re.match(r"^[A-Za-z0-9._:]+$", package):
                     return False, "包名不合法（仅允许字母、数字、点、下划线、冒号）"
                 if not server.switch_cb:
-                    return False, "未运行采集器，无法切换目标（请用 start_perfdog.bat 启动后再切换）"
+                    return False, "未运行采集器，无法切换目标（请用 start_perfcollect.bat 启动后再切换）"
                 try:
                     ok, msg = server.switch_cb(package, pattern)
                     return ok, msg
@@ -885,7 +885,7 @@ class WebServer:
             def _send_raw(self, name):
                 """UI优化 4.1：伺服 output 下的自包含 HTML 报告（只读）。
 
-                采集结束自动生成 output/<run_dir>/perfdog_<run_id>.html，用户要在
+                采集结束自动生成 output/<run_dir>/perfcollect_<run_id>.html，用户要在
                 看板内一键打开/分享。防穿越校验与 _load_report 同口径：
                 规范化后必须仍在 output 目录内；只放行 .html。
                 """

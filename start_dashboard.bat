@@ -1,6 +1,6 @@
 @echo off
 setlocal
-title PerfDog-CN Dashboard
+title PerfCollect-CN Dashboard
 cd /d "%~dp0collector"
 
 set "UV=uv"
@@ -17,7 +17,7 @@ start "" http://localhost:8080/report.html
 
 echo.
 echo ==================================================
-echo  PerfDog-CN  : dashboard only (no device needed)
+echo  PerfCollect-CN  : dashboard only (no device needed)
 echo  History     : http://localhost:8080/report.html
 echo  Stop        : close window or Ctrl+C
 echo ==================================================

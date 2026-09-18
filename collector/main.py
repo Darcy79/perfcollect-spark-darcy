@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""自研 PerfDog 采集器 — 第一阶段骨架（FPS/CPU/内存）。
+"""自研 PerfCollect 采集器 — 第一阶段骨架（FPS/CPU/内存）。
 
 用法:
     python main.py                          # 默认 config.json，1s 间隔，Ctrl+C 停止
@@ -7,7 +7,7 @@
     python main.py --interval 0.5           # 0.5s 间隔
     python main.py --output ../test1        # 指定输出目录
 
-输出: <output>/perfdog_<YYYYmmdd_HHMMSS>.jsonl（每行一个采样点）
+输出: <output>/perfcollect_<YYYYmmdd_HHMMSS>.jsonl（每行一个采样点）
 """
 
 import argparse
@@ -87,7 +87,7 @@ MISMATCH_CHECK_INTERVAL = 10.0
 
 
 def main():
-    ap = argparse.ArgumentParser(description="自研 PerfDog 采集器（第一阶段：FPS/CPU/内存）")
+    ap = argparse.ArgumentParser(description="自研 PerfCollect 采集器（第一阶段：FPS/CPU/内存）")
     ap.add_argument("--config", default="config.json", help="配置文件路径")
     ap.add_argument("--package", default=None, help="覆盖目标包名（测其他 App，如 --package com.example.game）")
     ap.add_argument("--process-pattern", default=None,
@@ -199,7 +199,7 @@ def main():
         # 看板地址 / 历史报告地址 / 数据目录绝对路径 / 如何开始与停止
         print("")
         print("=" * 60)
-        print("  PerfDog-CN 看板已启动")
+        print("  PerfCollect-CN 看板已启动")
         open_hint = "（即将自动打开浏览器）" if not args.no_browser else ""
         print(f"  实时看板  : http://localhost:{port}  {open_hint}".rstrip())
         print(f"  历史报告  : http://localhost:{port}/report.html")
@@ -361,7 +361,7 @@ def main():
     # 每次采集新建一个按时间命名的文件夹，内含 jsonl 与 html 报告，避免历史数据混淆
     run_dir = os.path.join(outdir, run_id)
     os.makedirs(run_dir, exist_ok=True)
-    out_file = os.path.join(run_dir, f"perfdog_{run_id}.jsonl")
+    out_file = os.path.join(run_dir, f"perfcollect_{run_id}.jsonl")
     jsonl_writer = JsonlWriter(out_file).start()
     # meta 必须先于 Web 回调和采样线程注册，确保任何并发事件都排在首行之后。
     jsonl_writer.write({
@@ -386,7 +386,7 @@ def main():
         try:
             monitor = LogcatMonitor(adb, serial)
             monitor.start()
-            events_file = os.path.join(run_dir, f"perfdog_{run_id}.events.jsonl")
+            events_file = os.path.join(run_dir, f"perfcollect_{run_id}.events.jsonl")
             events_sink = JsonlEventSink(events_file)
             print(f"[+] logcat 事件监听已启动（模式1：捞 console.log，tag/关键词过滤，限流 {monitor._min_gap}s）")
         except Exception as e:
@@ -605,7 +605,7 @@ def main():
         from export_report import load_rows, export_html
         rows = load_rows(out_file)
         if rows:
-            html_path = os.path.join(run_dir, f"perfdog_{run_id}.html")
+            html_path = os.path.join(run_dir, f"perfcollect_{run_id}.html")
             export_html(rows, html_path)
             print(f"[+] 已生成 HTML 报告: {html_path}（双击打开即可查看）")
     except Exception as e:

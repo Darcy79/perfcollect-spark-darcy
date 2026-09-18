@@ -1,5 +1,5 @@
 /**
- * app.js — 自研 PerfDog Web 看板共享逻辑
+ * app.js — 自研 PerfCollect Web 看板共享逻辑
  * 提供 window.PerfCharts：图表创建 / 渲染 / 统计 / 无数据自动隐藏
  * V0.2：新增帧时间 / 网络 / 电池温度图表
  */
@@ -36,7 +36,7 @@
     if (!container) return;
     var cards = container.querySelectorAll('.chart-card');
     if (!cards.length) return;
-    var storeKey = 'perfdog_order_' + (location.pathname.replace(/[^a-z0-9]/gi, '_') || 'root');
+    var storeKey = 'perfcollect_order_' + (location.pathname.replace(/[^a-z0-9]/gi, '_') || 'root');
 
     // 应用上次保存的顺序
     try {
@@ -183,8 +183,8 @@
       var inst = echarts.getInstanceByDom(el);
       if (inst && _pinCharts.indexOf(inst) < 0) _pinCharts.push(inst);
     });
-    if (!_pinCharts.length) { console.log('[PerfDog] 点击锁定: 未找到图表'); return; }
-    console.log('[PerfDog] 点击锁定已启用, 图表数=' + _pinCharts.length);
+    if (!_pinCharts.length) { console.log('[PerfCollect] 点击锁定: 未找到图表'); return; }
+    console.log('[PerfCollect] 点击锁定已启用, 图表数=' + _pinCharts.length);
 
     _pinCharts.forEach(function (chart) {
       if (!chart) return;
@@ -203,17 +203,17 @@
         var localX = x - r.left;      // 容器内像素（所见即所点，与包围盒同一坐标系）
         var localY = y - r.top;
         if (_hitLegendBox(chart, localX, localY)) {
-          console.log('[PerfDog] 点击 legend → 跳过贯穿线锁定');
+          console.log('[PerfCollect] 点击 legend → 跳过贯穿线锁定');
           return;
         }
         var idx = _pinIndexAtLocal(chart, dom, localX, localY);
-        console.log('[PerfDog] 点击 x=' + Math.round(x) + ' y=' + Math.round(y) +
+        console.log('[PerfCollect] 点击 x=' + Math.round(x) + ' y=' + Math.round(y) +
                     ' → idx=' + idx + ' localX=' + Math.round(localX));
         if (idx === null || idx < 0) return;
-        if (_pinIdx === idx) { console.log('[PerfDog] 再点同点 → 解锁'); _pinUnlockAll(); }
-        else { console.log('[PerfDog] 锁定 index=' + idx); _pinLockAll(idx, localX); }
+        if (_pinIdx === idx) { console.log('[PerfCollect] 再点同点 → 解锁'); _pinUnlockAll(); }
+        else { console.log('[PerfCollect] 锁定 index=' + idx); _pinLockAll(idx, localX); }
       });
-      dom.addEventListener('dblclick', function () { console.log('[PerfDog] 双击 → 解锁'); _pinUnlockAll(); });
+      dom.addEventListener('dblclick', function () { console.log('[PerfCollect] 双击 → 解锁'); _pinUnlockAll(); });
     });
   }
 
@@ -258,7 +258,7 @@
     }
     if (!_probeWarned) {
       _probeWarned = true;
-      console.warn('[PerfDog] convertFromPixel finder 返回无效值，改用 grid 兜底换算：' +
+      console.warn('[PerfCollect] convertFromPixel finder 返回无效值，改用 grid 兜底换算：' +
                    probeResults.join('；'));
     }
     var w = dom.clientWidth || dom.getBoundingClientRect().width;
@@ -494,7 +494,7 @@
     _pinNotify(null);   // v52（需求 B）：解锁 → 通知快照条隐藏
   }
 
-  // ---------------- 自定义时间拖动条（2026-08-14 v28，PerfDog 云端风格） ----------------
+  // ---------------- 自定义时间拖动条（2026-08-14 v28，PerfCollect 云端风格） ----------------
   // 弃用 ECharts 自带 slider，自写小型 HTML 拖动条：
   //   - 体积小（高 14px）；按下即拖，无需精确抓手柄
   //   - 两端细蓝色竖条 = 缩放；中间选区拖动 = 平移；点击选区外 = 窗口跳转到点击处
@@ -892,8 +892,13 @@
     return idx;
   }
 
+  // v72：长报告的 6 图 tooltip 联动会在 mousemove 时频繁传播
+  // highlight/downplay。ECharts 默认 emphasis 会重画曲线，接近 3000 点时
+  // 肉眼可见为线条闪烁。禁用线系列 hover 强调，但保留 axisPointer/
+  // tooltip 和跨图白线联动，数据与点击锁定逻辑不变。
   var baseLine = { type: 'line', showSymbol: false, connectNulls: true,
-                   lineStyle: { width: 1.6 }, sampling: 'lttb' };
+                   lineStyle: { width: 1.6 }, sampling: 'lttb',
+                   emphasis: { disabled: true } };
 
   // v41：集中颜色映射——series 顶层 color（决定 legend 图标色 + tooltip marker 色）
   // 与 lineStyle.color（决定曲线色）必须取同一值，否则会出现"legend 图标一个色、
@@ -927,6 +932,10 @@
       // bottom 在有时间滑动条时让出空间给 slider
       grid: { left: GRID_PAD.left, right: GRID_PAD.right, top: 34, bottom: 28 },
       tooltip: { trigger: 'axis', confine: true,
+        // 跨图联动时立即跟随指针，避免上一个位置的 CSS 过渡与
+        // 新一轮 showTip/hideTip 重叠产生视觉抖动。
+        transitionDuration: 0,
+        axisPointer: { type: 'line', animation: false },
         // v46：白线 tooltip 按数值降序排列（FPS 59 在 Jank 3 上面、进程% 129 在整机% 43 上面）
         order: 'valueDesc',
         valueFormatter: function (v) { return (typeof v === 'number') ? v.toFixed(2) : v; } },

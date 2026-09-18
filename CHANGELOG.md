@@ -1,4 +1,4 @@
-# CHANGELOG — 自研 PerfDog 变更日志
+# CHANGELOG — 自研 PerfCollect 变更日志
 
 > **接手项目先读本文件最新 1~2 条 + `AGENTS.md`（协作规约）**，不必通读代码。
 > 每条格式：`版本 | 日期 | 负责 | 改动文件 | 为什么 | 影响面`。
@@ -6,22 +6,48 @@
 
 ---
 
-## 当前状态（2026-09-18，v90）
+## 当前状态（2026-09-18，v91）
 
 | 项 | 值 |
 |---|---|
-| 前端资源版本 | **v71**（`web/index.html` + `web/report.html` 各 3 处 `?v=`） |
-| 测试 | Python **255** 条 + JS **152** 断言（全绿） |
-| 分发方式 | **zip**（`make_zip.bat` / `tools/make_zip.py` → `share/perfdog-cn-<版本>-<日期>.zip`）——**已无 exe / 安装包** |
+| 前端资源版本 | **v72**（`web/index.html` + `web/report.html` 各 3 处 `?v=`） |
+| 测试 | Python **255** 条 + JS **155** 断言（全绿） |
+| 分发方式 | **zip**（`make_zip.bat` / `tools/make_zip.py` → `share/perfcollect-cn-<版本>-<日期>.zip`）——**已无 exe / 安装包** |
 | 采集环境 | Windows + adb 真机（荣耀 ADT-AN00 Magic3 Pro / OPPO；详见 `devices.md`） |
 | 工具链 | `uv`（Python）+ `bun`（JS 测试）+ `adb`；路径见 `AGENTS.md` §4 |
 
 **未完成 / 待验证**
 
 - 代码（非阻塞）：report.html 内联 JS 抽离、main.py 继续可测试化、apk_label 二进制解析模糊测试
-- 待真人参与：真机矩阵（微信多开 / 分屏、高刷切换、30min+ 长测）；官方 PerfDog 对拍（**先出《口径差异白皮书》**，口径素材见 `指标说明.md`「九」）
+- 待真人参与：真机矩阵（微信多开 / 分屏、专项高刷切换）；官方 PerfDog 对拍（**先出《口径差异白皮书》**，口径素材见 `指标说明.md`「九」）
 - 待真机确认：开小游戏时 appbrand 进程的 `comm`/`cmdline` 实测值；OPPO 及其他品牌 `comm` 截断方向（首 15 / 末 15）；微信多开时 appbrand1/2 能否区分
 - 待真机抽检：v73 的 pin 蓝线修复（wizard 流程已在无设备环境下用 Edge headless 复现验证，真机待设备恢复后手工确认一次）
+
+---
+
+## v91（2026-09-18 · Codex）—— 48 分钟长测验收与悬停闪烁修复
+
+- **长测链路通过**：复核 `20260918_103516` 的 2867 个报告点（约
+  48.2 分钟），无 JSON 损坏、无 >1.5s 断档、无指标错误码，PID 与 SF 图层
+  全程稳定；`fps_clamped` / `low_frames` 均为 0。
+- **长测风险提示**：后半程 FPS 与前半程相比明显回落，同时电池温度
+  上升至 44°C、CPU 与 PSS 上升；这是被测应用/场景的性能风险，不是
+  采集链路异常，需用固定场景循环复测区分热降频与内存累积。
+- **悬停闪烁修复**：长报告多图 `echarts.connect` 会在鼠标移动时高频传播
+  hover 强调与 tooltip 过渡，接近 3000 点时会引起曲线反复重画。现禁用
+  线系列默认 emphasis，并关闭 tooltip/axisPointer 延迟动画；跨图白线、
+  tooltip 和点击锁定功能保留。
+- **回归**：JS **152 → 155** 断言；前端资源 **v71 → v72**。
+- **改名（主会话执行）**：自研品牌 `PerfDog` → **`PerfCollect`**，仓库改名
+  `perfcollect-spark-darcy`：UI 标题/页脚、`start_perfcollect.bat`、`sdk/perfcollect-sdk.js`、
+  数据文件前缀 `perfcollect_<run_id>.{jsonl,events.jsonl,html}`、分发 zip 顶层目录、
+  Excel sheet 名、报告标题、控制台与浏览器日志标记统一替换。
+  ⚠️ **第三方指名引用保留**：文中指向商业工具 PerfDog 的表述（"与 PerfDog 同口径"、
+  "官方 PerfDog 对拍"、"PerfDog Memory"、"PerfDog 官方免 root 同理"等）与历史产物名
+  （`perfdog.spec`、`perfdog.exe`）按原样保留——替换成自家名字会让技术表述失真。
+  ⚠️ **历史数据零改动**：`collector/output` 下 114 个旧文件名与 45 个 run 目录保持原样；
+  服务端按 `*.jsonl` 扫描、报告页按 API 返回的真实文件名读取，旧报告无需重命名即可继续查看
+  （已用真实长测 `20260918_103516` 走 HTTP 端点验证）。
 
 ---
 
@@ -322,11 +348,11 @@
     以及未纳入版本库的 `installer_output/`（12 MB 安装包）与 `staging/`）、
     `.github/workflows/build.yml`（打包 exe + 发 Release），并清理本机 `build/`、`dist/` 产物
   - **新增** `tools/make_zip.py` + 根目录 `make_zip.bat`：生成
-    `share/perfdog-cn-<版本>-<日期>.zip`（版本号自动从本文件状态头读取；脚本内自检
+    `share/perfcollect-cn-<版本>-<日期>.zip`（版本号自动从本文件状态头读取；脚本内自检
     「不含 collector/output/」）；新增 `分享说明.md`（打包后作为包内「先读我-使用说明.md」）
   - **新增** `.github/workflows/tests.yml` 取代 `build.yml`：只跑 `py_compile` +
     Python 单测 + JS 断言 + 打包脚本冒烟（CI 从"出安装包"变为"守代码质量"）
-  - `start_perfdog.bat` / `start_dashboard.bat`：加 `--with openpyxl`
+  - `start_perfcollect.bat` / `start_dashboard.bat`：加 `--with openpyxl`
     （仅 XLSX 导出需要，其余功能零依赖 → zip 分发开箱可用）
   - `.gitignore`：清理打包相关规则（`build/`、`dist/`、`*.spec`、`packaging/staging/`、
     `packaging/installer_output/`），新增 `share/`

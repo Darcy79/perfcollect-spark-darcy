@@ -1,7 +1,7 @@
 /**
- * perfdog-sdk.js — 自研 PerfDog 小游戏埋点 SDK（LayaAir 版骨架）
+ * perfcollect-sdk.js — 自研 PerfCollect 小游戏埋点 SDK（LayaAir 版骨架）
  * =====================================================================
- * 配套工具：C:\Users\SparkGame\Desktop\deepseekv4-flash产出\自研perfdog\collector\
+ * 配套采集端：<项目根>\collector\（同仓库的 PerfCollect 采集器；本 SDK 只负责游戏内埋点）
  * 版本：V0.1 骨架（2026-08-12）
  * 适配：LayaAir 3.4（已按 layabox/LayaAir LayaAir_3.4 分支核对 StatElement
  *       枚举与索引，与 3.3 一致；3.x 系列通用。索引表见下方 STAT_IDX）
@@ -14,12 +14,12 @@
  *
  * 接入方式（测试包专用，不改线上逻辑）：
  *   在 Laya 项目入口（如 Game.ts / Main.ts 的启动流程最前面）：
- *     import * as PerfDogSDK from "./perfdog-sdk";
- *     PerfDogSDK.start({ sampleIntervalMs: 1000 });
+ *     import * as PerfCollectSDK from "./perfcollect-sdk";
+ *     PerfCollectSDK.start({ sampleIntervalMs: 1000 });
  *     // 场景切换处：
- *     PerfDogSDK.scene("scene_name");
+ *     PerfCollectSDK.scene("scene_name");
  *     // 关键节点：
- *     PerfDogSDK.mark("修甲开始");
+ *     PerfCollectSDK.mark("修甲开始");
  *
  * 数据格式（每行一个 JSON，t_ms 与采集器 JSONL 同时间轴）：
  *   {"t_ms":1234,"fps":60,"frameTimeMs":16.7,"raf":{"fps":60,"avgGapMs":16.6,"maxGapMs":80},
@@ -44,7 +44,7 @@
     threadStats: true,        // JS 线程忙采样
     sceneTracking: true,      // 场景追踪
     writeToFile: true,        // 写本地文件（wx 环境）
-    logFilename: 'perfdog_sdk.jsonl', // 输出文件名（wx.env.USER_DATA_PATH 下）
+    logFilename: 'perfcollect_sdk.jsonl', // 输出文件名（wx.env.USER_DATA_PATH 下）
   };
 
   // ------------------------------------------------------------------
@@ -253,7 +253,7 @@
   // ------------------------------------------------------------------
   // 对外接口
   // ------------------------------------------------------------------
-  var PerfDogSDK = {
+  var PerfCollectSDK = {
     start: function (config) {
       if (state.running) return;
       if (config) for (var k in config) if (Object.prototype.hasOwnProperty.call(config, k)) CONFIG[k] = config[k];
@@ -271,10 +271,10 @@
             statAgentFound: !!agent,
             fps: stat.FPS != null ? stat.FPS : null,
           };
-          console.log('[PerfDogSDK] 引擎统计探测: ' + JSON.stringify(probe));
-        } catch (e) { console.log('[PerfDogSDK] 引擎统计探测失败: ' + e); }
+          console.log('[PerfCollectSDK] 引擎统计探测: ' + JSON.stringify(probe));
+        } catch (e) { console.log('[PerfCollectSDK] 引擎统计探测失败: ' + e); }
       } else {
-        console.log('[PerfDogSDK] 未找到 Laya.Stat，仅用 rAF 采样（降级）');
+        console.log('[PerfCollectSDK] 未找到 Laya.Stat，仅用 rAF 采样（降级）');
       }
 
       if (CONFIG.rafStats) {
@@ -283,7 +283,7 @@
       }
 
       state.timer = setInterval(sample, CONFIG.sampleIntervalMs);
-      console.log('[PerfDogSDK] started, interval=' + CONFIG.sampleIntervalMs + 'ms');
+      console.log('[PerfCollectSDK] started, interval=' + CONFIG.sampleIntervalMs + 'ms');
     },
 
     stop: function () {
@@ -291,7 +291,7 @@
       state.running = false;
       if (state.timer) clearInterval(state.timer);
       state.timer = null;
-      console.log('[PerfDogSDK] stopped, samples=' + state.samples.length);
+      console.log('[PerfCollectSDK] stopped, samples=' + state.samples.length);
     },
 
     /** 场景打点：scene('scene_name')，压栈当前场景 */
@@ -322,11 +322,11 @@
     },
   };
 
-  // 全局挂载（微信小游戏 / 浏览器环境直接 window.PerfDogSDK 或 globalThis.PerfDogSDK）
-  global.PerfDogSDK = PerfDogSDK;
+  // 全局挂载（微信小游戏 / 浏览器环境直接 window.PerfCollectSDK 或 globalThis.PerfCollectSDK）
+  global.PerfCollectSDK = PerfCollectSDK;
   // CJS 环境兼容（Node/bun 直接 require 时也能拿到）
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { PerfDogSDK: PerfDogSDK };
+    module.exports = { PerfCollectSDK: PerfCollectSDK };
   }
 })(
   // 取真正的全局对象：globalThis 在微信小游戏 / 现代 JS 环境均可用；

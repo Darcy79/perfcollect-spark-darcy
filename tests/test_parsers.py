@@ -471,7 +471,7 @@ class TestReportCacheLru(unittest.TestCase):
         import tempfile
         from web import WebServer
 
-        tmp = tempfile.mkdtemp(prefix="perfdog_test_")
+        tmp = tempfile.mkdtemp(prefix="perfcollect_test_")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         names = []
         for i in range(count):
@@ -540,7 +540,7 @@ class TestRunsMetaCount(unittest.TestCase):
         import shutil
         import tempfile
         from web import WebServer
-        tmp = tempfile.mkdtemp(prefix="perfdog_runs_")
+        tmp = tempfile.mkdtemp(prefix="perfcollect_runs_")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         for rel, lines in files.items():
             fp = os.path.join(tmp, rel)

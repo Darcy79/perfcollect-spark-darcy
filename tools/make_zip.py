@@ -5,7 +5,7 @@
     python tools/make_zip.py                 # 版本号自动从 CHANGELOG.md 读取
     python tools/make_zip.py --version v72   # 手动指定版本号
     python tools/make_zip.py --out D:\\tmp    # 指定输出目录（默认 share/）
-输出：<out>/perfdog-cn-<版本>-<日期>.zip
+输出：<out>/perfcollect-cn-<版本>-<日期>.zip
 
 为什么改成 zip 分发（2026-09-17 决策）：
     源码本身就能直接跑（uv / python），zip 解压即用、内容可审计、不会被杀软误报、
@@ -37,7 +37,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # 打进分发包的顶层目录 / 文件（相对项目根）
 INCLUDE_DIRS = ["collector", "web", "sdk", "tests"]
 INCLUDE_FILES = [
-    "start_perfdog.bat", "start_dashboard.bat",
+    "start_perfcollect.bat", "start_dashboard.bat",
     "README.md", "使用教程-保姆级.md", "指标说明.md", "devices.md",
 ]
 # 进包时改名（源文件 → 包内路径）
@@ -116,7 +116,7 @@ def collect():
 def version_txt(version, n_files):
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return (
-        "PerfDog-CN 分发包\n"
+        "PerfCollect-CN 分发包\n"
         "=================\n"
         "版本：%s\n"
         "打包时间：%s\n"
@@ -124,8 +124,8 @@ def version_txt(version, n_files):
         "\n"
         "怎么跑起来（3 步）\n"
         "------------------\n"
-        "1) 解压到任意路径（建议英文路径，如 D:\\perfdog）\n"
-        "2) 双击 start_perfdog.bat   —— 采集 + 实时看板（需要 uv 或 Python）\n"
+        "1) 解压到任意路径（建议英文路径，如 D:\\perfcollect）\n"
+        "2) 双击 start_perfcollect.bat   —— 采集 + 实时看板（需要 uv 或 Python）\n"
         "   只想看历史报告：双击 start_dashboard.bat（不需要连手机）\n"
         "3) 浏览器会自动打开 http://localhost:8080\n"
         "\n"
@@ -147,7 +147,7 @@ def version_txt(version, n_files):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="打包 PerfDog-CN 分发 zip")
+    ap = argparse.ArgumentParser(description="打包 PerfCollect-CN 分发 zip")
     ap.add_argument("--version", default=None, help="版本号（默认从 CHANGELOG 自动读取）")
     ap.add_argument("--out", default=None, help="输出目录（默认 项目根/share）")
     args = ap.parse_args()
@@ -155,7 +155,7 @@ def main():
     version = args.version or detect_version()
     out_dir = args.out or os.path.join(ROOT, "share")
     date = datetime.datetime.now().strftime("%Y%m%d")
-    top = "perfdog-cn-%s" % version
+    top = "perfcollect-cn-%s" % version
     out_path = os.path.join(out_dir, "%s-%s.zip" % (top, date))
 
     items = collect()

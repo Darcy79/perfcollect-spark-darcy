@@ -1,6 +1,6 @@
 @echo off
 setlocal
-title PerfDog-CN Collector
+title PerfCollect-CN Collector
 cd /d "%~dp0collector"
 
 rem --- locate uv (PATH only; no private-path fallback, portable on any machine) ---
@@ -19,7 +19,7 @@ rem     avoids opening a tab before the service is up / duplicate tabs) ---
 
 echo.
 echo ==================================================
-echo  PerfDog-CN  : collect + web dashboard
+echo  PerfCollect-CN  : collect + web dashboard
 echo  Live view   : http://localhost:8080
 echo  History     : http://localhost:8080/report.html
 echo  Data saved  : output\<timestamp>\  (jsonl + html)

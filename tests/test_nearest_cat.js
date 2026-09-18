@@ -467,6 +467,44 @@ if (typeof computeCompleteness !== 'function') {
   ]), '', 'FPS 质量标记：不重复统计复用快照');
 }
 
+// ---------------- 长报告悬停稳定性（v91 / 前端 v72） ----------------
+{
+  const oldDocument = globalThis.document;
+  const cards = {};
+  ['chart-fps', 'chart-frametime', 'chart-cpu', 'chart-mem', 'chart-net', 'chart-temp']
+    .forEach((id) => { cards[id] = { parentElement: { style: {} } }; });
+  globalThis.document = { getElementById: (id) => cards[id] || null };
+
+  function captureChart() {
+    return {
+      options: [],
+      setOption(opt) { this.options.push(opt); },
+      resize() {},
+    };
+  }
+  const charts = {
+    fps: captureChart(), frametime: captureChart(), cpu: captureChart(),
+    mem: captureChart(), net: captureChart(), temp: captureChart(),
+  };
+  const rows = [{
+    t_ms: 1000,
+    fps: { fps: 60, jank_rate: 0, frame_p50_ms: 16.7, frame_p95_ms: 16.8, frame_max_ms: 17 },
+    cpu: { cpu_total_pct: 30, cpu_proc_pct: 50 },
+    mem: { pss_kb: 102400, vmrss_kb: 204800 },
+    net: { rx_kbps: 1, tx_kbps: 1 },
+    therm: { temp_c: 35, power_w: 2 },
+  }];
+  window.PerfCharts.renderAll(charts, rows, { zoom: true });
+  const fpsOption = charts.fps.options[0];
+  eq(fpsOption.series.every((s) => s.emphasis && s.emphasis.disabled === true), true,
+     '长报告悬停：线系列禁用默认 emphasis 重画');
+  eq(fpsOption.tooltip.transitionDuration, 0,
+     '长报告悬停：tooltip 不做跨图位置过渡');
+  eq(fpsOption.tooltip.axisPointer.animation, false,
+     '长报告悬停：联动白线不做延迟动画');
+  globalThis.document = oldDocument;
+}
+
 if (failures.length) {
   console.error(`[x] 断言失败 ${failures.length} 条（通过 ${passed}）：`);
   failures.forEach((f) => console.error('    - ' + f));

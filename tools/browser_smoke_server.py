@@ -63,11 +63,11 @@ def prepare_output(output_dir):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="PerfDog 浏览器最小回归服务")
+    parser = argparse.ArgumentParser(description="PerfCollect 浏览器最小回归服务")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
 
-    with tempfile.TemporaryDirectory(prefix="perfdog-browser-smoke-") as output_dir:
+    with tempfile.TemporaryDirectory(prefix="perfcollect-browser-smoke-") as output_dir:
         latest = prepare_output(output_dir)
         server = WebServer(port=args.port, output_dir=output_dir)
         port = server.start()

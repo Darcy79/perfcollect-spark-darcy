@@ -171,7 +171,7 @@ def export_xlsx(rows, out_path):
     flat = [flatten(r) for r in rows]
     wb = Workbook()
     ws = wb.active
-    ws.title = "perfdog"
+    ws.title = "perfcollect"
     ws.append([label for _, label in COLUMNS])
     for r in flat:
         ws.append([r.get(k, "") for k, _ in COLUMNS])
@@ -237,7 +237,7 @@ def export_html(rows, out_path, events=None):
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PerfDog 自研工具 · 报告</title>
+<title>PerfCollect 自研工具 · 报告</title>
 <style>{style}</style>
 </head>
 <body>
@@ -256,7 +256,7 @@ def export_html(rows, out_path, events=None):
   <section class="chart-card"><div class="chart-head"><h2>网络流量</h2><div id="stat-net" class="stat-line"></div></div><div id="chart-net" class="chart"></div></section>
   <section class="chart-card"><div class="chart-head"><h2>电池温度 / 功率</h2><div id="stat-temp" class="stat-line"></div></div><div id="chart-temp" class="chart"></div></section>
 </main>
-<footer><span>自研 PerfDog · 数据仅存本地，不传云端</span></footer>
+<footer><span>自研 PerfCollect · 数据仅存本地，不传云端</span></footer>
 <script>{echarts}</script>
 <script>{appjs}</script>
 <script>
@@ -294,7 +294,7 @@ def export_html(rows, out_path, events=None):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="PerfDog-CN JSONL 导出工具")
+    ap = argparse.ArgumentParser(description="PerfCollect-CN JSONL 导出工具")
     ap.add_argument("--input", required=True, help="输入 jsonl 路径")
     ap.add_argument("--format", choices=["html", "csv", "xlsx"], default="html")
     ap.add_argument("--out", default="", help="输出路径（默认与输入同名，扩展名按格式）")

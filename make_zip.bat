@@ -1,10 +1,10 @@
 @echo off
 setlocal
-title PerfDog-CN - make share zip
+title PerfCollect-CN - make share zip
 cd /d "%~dp0"
 
 echo ==================================================
-echo  PerfDog-CN  : 打包分发 zip（替代 exe / 安装包）
+echo  PerfCollect-CN  : 打包分发 zip（替代 exe / 安装包）
 echo ==================================================
 echo.
 
