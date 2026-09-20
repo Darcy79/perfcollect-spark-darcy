@@ -18,3 +18,9 @@ share/
 # 其它
 .uv-cache/
 *.log
+
+# 本地开发专用（内部文档/评估/交接/路线图等，只允许本地看，不入库）
+docs-local/
+
+# AGENTS.md：AI 协作者规约（需留在根目录才能被自动发现，但不公开）
+AGENTS.md
