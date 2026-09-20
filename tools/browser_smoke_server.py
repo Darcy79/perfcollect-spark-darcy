@@ -74,14 +74,19 @@ def main():
         server.set_status(
             running=True, device="Browser-Smoke", pid=12345,
             run_id="smoke-live", target="com.tencent.mm",
+            report_name="smoke-a/smoke-a.jsonl",
             process_pattern="appbrand", cores=8, phase="running")
         for row in latest:
             server.add_sample(row)
         print(f"BROWSER_SMOKE_URL=http://127.0.0.1:{port}", flush=True)
         print(f"BROWSER_SMOKE_REPORT=http://127.0.0.1:{port}/report.html", flush=True)
+        live_index = len(latest)
         try:
             while True:
-                time.sleep(1)
+                # 持续推送合成采样，覆盖实时刷新期间的交互稳定性（例如 Label 改名输入框）。
+                time.sleep(0.5)
+                server.add_sample(_sample(live_index))
+                live_index += 1
         except KeyboardInterrupt:
             pass
         finally:

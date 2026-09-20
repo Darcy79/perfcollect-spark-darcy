@@ -19,7 +19,8 @@ const path = require('path');
 // 无 DOM 环境：造一个 window 壳给 app.js 挂载导出
 globalThis.window = globalThis;
 const APP_JS = path.join(__dirname, '..', 'web', 'assets', 'app.js');
-new Function(fs.readFileSync(APP_JS, 'utf8'))();
+const APP_SOURCE = fs.readFileSync(APP_JS, 'utf8');
+new Function(APP_SOURCE)();
 
 const nearestCat = window.PerfCharts && window.PerfCharts.nearestCat;
 if (typeof nearestCat !== 'function') {
@@ -69,6 +70,36 @@ eq(nearestCat(T, 2700), 2, '不等距区间内偏左 → 取左邻');
 // 类目取值精度：四舍五入到 0.1s（与 renderAll 的 x 轴生成口径一致）
 eq(nearestCat([10440], 10440), 10.4, '类目值保留 1 位小数');
 eq(nearestCat([10460], 10460), 10.5, '类目值四舍五入');
+
+// Label 条按 ID 增量更新，改名和分段必须是两个独立点击目标。
+eq(APP_SOURCE.indexOf("dataset.labelKey") >= 0, true,
+   'Label 增量渲染：使用稳定 ID 复用色块节点');
+eq(APP_SOURCE.indexOf("label-split-button") >= 0, true,
+   'Label 交互隔离：存在独立分段按钮');
+eq(APP_SOURCE.indexOf("_zoomLabelTimeline") >= 0, true,
+   'Label 缩放联动：时间轨注册全局拖动窗口');
+eq(APP_SOURCE.indexOf("stopImmediatePropagation") >= 0, true,
+   '历史滚轮：图表不再吞掉页面 wheel 默认滚动');
+eq(APP_SOURCE.indexOf("_pinLockAll(idx, localX)") < 0, true,
+   'Pin 吸附：锁定线不再保留原始点击像素');
+eq(APP_SOURCE.indexOf("锁定点已在当前缩放窗口外") < 0, true,
+   'Pin 缩放：窗口外只隐藏图内元素，不追加抖动页面的警告行');
+eq(APP_SOURCE.indexOf("options.alignChartId") >= 0, true,
+   'Label 对齐：时间轨支持声明图表绘图区坐标基准');
+
+const timeToCategoryIndex = window.PerfCharts.timeToCategoryIndex;
+const zoomCategoryWindow = window.PerfCharts.zoomCategoryWindow;
+eq(typeof timeToCategoryIndex, 'function', 'Label 对齐：导出时间到类目索引换算');
+eq(timeToCategoryIndex([1000, 2000, 4000], 1500), 0.5,
+   'Label 对齐：非等间隔采样在相邻类目间插值');
+eq(timeToCategoryIndex([1000, 2000, 4000], 3000), 1.5,
+   'Label 对齐：毫秒比例转换为连续类目索引');
+eq(timeToCategoryIndex([1000, 2000, 4000], 500), 0,
+   'Label 对齐：窗口左侧时间夹到首类目');
+eq(timeToCategoryIndex([1000, 2000, 4000], 5000), 2,
+   'Label 对齐：窗口右侧时间夹到末类目');
+eq(JSON.stringify(zoomCategoryWindow(211, 0, 31.25)), JSON.stringify({ start: 0, end: 65.625 }),
+   'Label 对齐：dataZoom 百分比使用 n-1 类目跨度');
 
 // 长序列：二分应稳定命中（顺带防死循环）
 const LONG = Array.from({ length: 1000 }, (_, i) => i * 500);   // 0 ~ 499.5s，步长 0.5s
@@ -503,6 +534,47 @@ if (typeof computeCompleteness !== 'function') {
   eq(fpsOption.tooltip.axisPointer.animation, false,
      '长报告悬停：联动白线不做延迟动画');
   globalThis.document = oldDocument;
+}
+
+// ---------------- 跨图 tooltip 完整性（v92 / 前端 v73） ----------------
+{
+  const render = window.PerfCharts.axisTooltipHtml;
+  eq(typeof render, 'function', 'tooltip 完整性：纯函数已导出');
+  const series = [
+    { name: 'FPS', color: '#4fc3f7', data: [60, 48.97] },
+    { name: 'Jank%(短窗合并)', color: '#ff8a65', data: [0, 2.08] },
+  ];
+  // 模拟 echarts.connect 只传回 Jank 一个 param；输出仍须从目标图数据重建两项。
+  const html = render(series, [{ seriesIndex: 1, dataIndex: 1, axisValueLabel: '1041.7', value: 2.08 }]);
+  eq(html.indexOf('1041.7') >= 0, true, 'tooltip 完整性：保留时间标题');
+  eq(html.indexOf('FPS') >= 0 && html.indexOf('48.97') >= 0, true,
+     'tooltip 完整性：单序列联动仍补齐 FPS');
+  eq(html.indexOf('Jank%(短窗合并)') >= 0 && html.indexOf('2.08') >= 0, true,
+     'tooltip 完整性：保留命中的 Jank');
+  eq(html.indexOf('48.97') < html.indexOf('2.08'), true,
+     'tooltip 完整性：维持按数值降序展示');
+  eq(render(series, []).length, 0, 'tooltip 完整性：空参数安全返回');
+}
+
+// ---------------- 区间标注映射（v94 / 前端 v75） ----------------
+{
+  const areas = window.PerfCharts.annotationMarkAreas([
+    { t_ms: 0 }, { t_ms: 1000 }, { t_ms: 2000 }, { t_ms: 3000 },
+  ], [
+    { start_ms: 900, end_ms: 2200, text: '战斗', color: '#ff7043' },
+    { start_ms: -500, end_ms: 500, text: '开场', color: '#4fc3f7' },
+    { start_ms: 5000, end_ms: 6000, text: '窗口外', color: '#ffffff' },
+    { start_ms: 1000, end_ms: 1000, text: '空区间', color: '#ffffff' },
+    { start_ms: 2500, end_ms: null, text: '进行中', color: '#66bb6a' },
+  ], true);
+  eq(areas.length, 3, '区间标注：过滤窗口外和空区间，保留进行中 Label');
+  eq(areas[0][0].xAxis, 1, '区间标注：起点吸附最近采样点');
+  eq(areas[0][1].xAxis, 2, '区间标注：终点吸附最近采样点');
+  eq(areas[1][0].xAxis, 0, '区间标注：与窗口相交时裁剪到首点');
+  eq(areas[0][0].label.formatter, '战斗', '区间标注：保留备注标签');
+  eq(areas[0][0].itemStyle.color, 'rgba(255,112,67,0.18)',
+     '区间标注：十六进制颜色转半透明色带');
+  eq(areas[2][1].xAxis, 3, '区间标注：进行中 Label 自动延伸到最新采样点');
 }
 
 if (failures.length) {

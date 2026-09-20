@@ -138,11 +138,13 @@ def check():
     }
     expected_frontend = next(
         (value for value in frontend_versions.values() if value is not None), None)
-    for page in ("web/index.html", "web/report.html"):
+    expected_refs = {"web/index.html": 3, "web/report.html": 4}
+    for page, expected_count in expected_refs.items():
         refs = re.findall(r"\?v=(\d+)", _read(page))
         frontend_versions[page] = "v" + refs[0] if refs else None
-        if len(refs) != 3:
-            errors.append(f"{page}：应有 3 个资源版本引用，实际 {len(refs)} 个")
+        if len(refs) != expected_count:
+            errors.append(
+                f"{page}：应有 {expected_count} 个资源版本引用，实际 {len(refs)} 个")
         if len(set(refs)) > 1:
             errors.append(f"{page}：资源版本引用不一致 {refs}")
         if expected_frontend and refs and "v" + refs[0] != expected_frontend:

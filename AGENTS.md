@@ -13,13 +13,13 @@ Windows + adb 采集 FPS / CPU / 内存 / 网络 / 温度 → 本地 `jsonl` →
 
 ---
 
-## 2. 当前状态（截至 2026-09-18，v91）
+## 2. 当前状态（截至 2026-09-20，v100）
 
 | 项 | 值 |
 |---|---|
 | 仓库 / 分支 | https://github.com/Darcy79/perfcollect-spark-darcy · `main` |
-| 前端资源版本 | **v72**（改前端必须升 `?v=`，`web/index.html` + `web/report.html` 各 3 处） |
-| 测试 | Python **255** 条（`tests/`）+ JS **155** 断言（`tests/test_nearest_cat.js`） |
+| 前端资源版本 | **v81**（改前端必须升 `?v=`；`web/index.html` 3 处、`web/report.html` 4 处） |
+| 测试 | Python **274** 条（`tests/`）+ JS **181** 断言（`tests/test_nearest_cat.js`） |
 | 最近变更 | `CHANGELOG.md`（**接手前必读最新 1~2 条**） |
 
 ---
@@ -28,7 +28,7 @@ Windows + adb 采集 FPS / CPU / 内存 / 网络 / 温度 → 本地 `jsonl` →
 
 1. **不要 `git commit` / `git push`**：所有改动留在工作区，由主会话统一核实、提交、同步 GitHub；
 2. **文件域隔离**：多成员并行时按域动手——采集端 `collector/**` + `tests/**`、前端 `web/**`、文档 `*.md`；不越界改别人的域；
-3. **改前端必升 `?v=`**（两页各 3 处），并确认无旧版本号残留；
+3. **改前端必升 `?v=`**（`index.html` 3 处、`report.html` 4 处），并确认无旧版本号残留；
 4. **不覆盖用户数据**：`collector/output/**`（采集数据）、`collector/.app_labels.json`（本机缓存）只读；
 5. **语义等价优先**：修 bug 不顺手重构、不夹带风格改写；不确定就在交付里说明，不要臆测；
 6. 只改需要的文件；发现别处有问题**只报告**，不要"顺手修"。
@@ -44,11 +44,12 @@ uv run --no-project python main.py --web            # --duration 60 定时长；
 双击 start_dashboard.bat
 
 # 测试（在项目根执行）
-uv run --no-project python -m unittest discover -s tests -p "test_*.py"   # 应 255 条全绿
-C:\Users\SparkGame\.cherrystudio\bin\bun.exe tests/test_nearest_cat.js    # 应 155 断言全过
+uv run --no-project python -m unittest discover -s tests -p "test_*.py"   # 应 274 条全绿
+C:\Users\SparkGame\.cherrystudio\bin\bun.exe tests/test_nearest_cat.js    # 应 181 断言全过
 
-# JS 语法检查（沙箱内 bun/cmd 不能走管道 → 必须 Start-Process 重定向）
+# JS 语法检查（app.js 与 report.js 均需检查）
 C:\Users\SparkGame\.cherrystudio\bin\bun.exe build web/assets/app.js --outfile <临时文件>
+C:\Users\SparkGame\.cherrystudio\bin\bun.exe build web/assets/report.js --outfile <临时文件>
 
 # 项目版本 / 测试数 / 前端资源版本一致性
 python tools/check_consistency.py
@@ -80,7 +81,7 @@ FPS 与 Jank/帧时间的时间窗**故意不同**（FPS=滚动缓冲主段均�
 | 你的任务 | 先读 |
 |---|---|
 | 采集端 / 指标算法 | `指标说明.md`、`devices.md`、对应的 `collector/metrics/*.py` |
-| 前端看板 | `web/assets/app.js`、`web/report.html`、`指标说明.md`「九、统计口径说明」 |
+| 前端看板 | `web/assets/app.js`、`web/assets/report.js`、`web/report.html`、`指标说明.md`「九、统计口径说明」 |
 | 文档 | `架构设计.md`、`指标说明.md`、`devices.md` |
 | 分发 / CI | `tools/make_zip.py` + `make_zip.bat`（zip 分发，**本项目已无 exe/安装包**）、`.github/workflows/tests.yml`、`README.md` |
 | 真机适配 | `devices.md`（含「五、换机验收步骤」） |
@@ -99,9 +100,9 @@ FPS 与 Jank/帧时间的时间窗**故意不同**（FPS=滚动缓冲主段均�
 
 ## 8. 提交前自检清单
 
-- [ ] Python 测试全绿（`unittest discover`，当前应为 255 条）
-- [ ] JS 测试全绿（`bun tests/test_nearest_cat.js`，当前应为 155 断言）
-- [ ] JS 语法检查通过（`bun build` app.js / 页面内联脚本）
+- [ ] Python 测试全绿（`unittest discover`，当前应为 274 条）
+- [ ] JS 测试全绿（`bun tests/test_nearest_cat.js`，当前应为 181 断言）
+- [ ] JS 语法检查通过（`bun build` app.js + report.js）
 - [ ] `python tools/check_consistency.py` 通过
 - [ ] 改了前端 → `?v=` 已升、无旧版本号残留
 - [ ] 没有越界改其他成员的文件域

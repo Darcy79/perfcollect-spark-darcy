@@ -63,16 +63,21 @@ class TestWebHttp(unittest.TestCase):
         index_code, index_type, index = self.request("GET", "/")
         report_code, report_type, report = self.request("GET", "/report.html")
         asset_code, asset_type, asset = self.request("GET", "/assets/app.js")
+        report_js_code, report_js_type, report_js = self.request(
+            "GET", "/assets/report.js")
         icon_code, icon_type, icon = self.request("GET", "/favicon.ico")
         self.assertEqual(
-            (index_code, report_code, asset_code, icon_code), (200, 200, 200, 200))
+            (index_code, report_code, asset_code, report_js_code, icon_code),
+            (200, 200, 200, 200, 200))
         self.assertIn("text/html", index_type)
         self.assertIn("text/html", report_type)
         self.assertIn("javascript", asset_type)
+        self.assertIn("javascript", report_js_type)
         self.assertIn("image/svg+xml", icon_type)
         self.assertIn(b"<!DOCTYPE html", index)
         self.assertIn(b"<!DOCTYPE html", report)
         self.assertTrue(asset)
+        self.assertIn(b"PerfCollect", report_js)
         self.assertIn(b"<svg", icon)
 
     def test_stop_and_shutdown_callbacks_are_reached_over_http(self):
@@ -211,6 +216,50 @@ class TestWebHttp(unittest.TestCase):
         self.assertTrue(cleared["ok"])
         self.assertFalse(os.path.exists(jsonl_path + ".remark.txt"))
 
+    def test_annotation_create_load_delete_round_trip(self):
+        run_dir = os.path.join(self.tempdir.name, "run-ann")
+        os.makedirs(run_dir)
+        report = os.path.join(run_dir, "capture.jsonl")
+        with open(report, "w", encoding="utf-8") as stream:
+            stream.write('{"t_ms":0}\n{"t_ms":5000}\n')
+        name = "run-ann/capture.jsonl"
+        create = urlencode({
+            "name": name, "start_ms": 1000, "end_ms": 4000,
+            "text": "Boss 战", "color": "#ff7043"})
+        code, result = self.request_json("POST", "/api/annotations?" + create)
+        self.assertEqual(code, 200)
+        self.assertTrue(result["ok"])
+        annotation_id = result["annotation"]["id"]
+        _, items = self.request_json(
+            "GET", "/api/annotations?" + urlencode({"name": name}))
+        self.assertEqual(items[0]["text"], "Boss 战")
+        delete = urlencode({"name": name, "action": "delete", "id": annotation_id})
+        _, deleted = self.request_json("POST", "/api/annotations?" + delete)
+        self.assertTrue(deleted["ok"])
+        _, items = self.request_json(
+            "GET", "/api/annotations?" + urlencode({"name": name}))
+        self.assertEqual(items, [])
+
+    def test_annotation_pin_and_rename_workflow(self):
+        run_dir = os.path.join(self.tempdir.name, "run-label")
+        os.makedirs(run_dir)
+        report = os.path.join(run_dir, "capture.jsonl")
+        with open(report, "w", encoding="utf-8") as stream:
+            stream.write('{"t_ms":0}\n{"t_ms":5000}\n')
+        name = "run-label/capture.jsonl"
+        _, first = self.request_json("POST", "/api/annotations?" + urlencode({
+            "name": name, "action": "pin", "at_ms": 1000}))
+        _, second = self.request_json("POST", "/api/annotations?" + urlencode({
+            "name": name, "action": "pin", "at_ms": 4000}))
+        self.assertTrue(first["ok"])
+        self.assertEqual(first["annotations"][0]["text"], "Label1")
+        self.assertEqual(first["annotations"][0]["end_ms"], 1000)
+        self.assertEqual(second["annotations"][1]["end_ms"], 4000)
+        self.assertEqual(second["annotation"]["text"], "Label3")
+        _, renamed = self.request_json("POST", "/api/annotations?" + urlencode({
+            "name": name, "action": "rename",
+            "id": first["annotations"][0]["id"], "text": "Boss 战"}))
+        self.assertEqual(renamed["annotation"]["text"], "Boss 战")
     def test_report_and_raw_reject_path_traversal(self):
         report_code, report = self.request_json(
             "GET", "/api/report?" + urlencode({"name": "../outside.jsonl"}))

@@ -11,6 +11,15 @@
   function makeChart(elId, group) {
     var el = document.getElementById(elId);
     if (!el) return null;
+    // v98：ECharts/zrender 会在 canvas 上接管 wheel。即使 dataZoom 禁用了滚轮，
+    // 事件仍可能被消费，导致鼠标停在图表时页面无法上下滚动。捕获阶段只阻断
+    // 图表自己的 wheel 监听，不 preventDefault，因此浏览器默认页面滚动继续生效。
+    if (!el.__pageWheelBound) {
+      el.__pageWheelBound = true;
+      el.addEventListener('wheel', function (e) {
+        if (!e.ctrlKey) e.stopImmediatePropagation();
+      }, { capture: true, passive: true });
+    }
     var chart = echarts.init(el);
     // 同一 group 的图表可联动（历史看板：鼠标悬停/点击时垂直线贯穿各模块）
     if (group) chart.group = group;
@@ -24,6 +33,13 @@
           var inst = echarts.getInstanceByDom(c);
           if (inst) inst.resize();
         });
+        // v99：图表 resize 后 grid 像素边界会变化；Pin 与历史 Label 必须在
+        // 同一帧重新定位，避免窗口宽度变化后再次出现视觉漂移。
+        if (_pinIdx !== null) _refreshPinAfterZoom();
+        if (_zoomLabelTimeline) {
+          renderLabelTimeline(_zoomLabelTimeline.elId, _zoomLabelTimeline.rows,
+                              _zoomLabelTimeline.annotations, _zoomLabelTimeline.options);
+        }
       });
     }
     return chart;
@@ -105,7 +121,6 @@
   var _catTimes = [];
   var _totalDurSec = 0;
   var _zoomWindowSec = null;   // null=全范围
-  var _pinWindowVisible = true;   // 锁定点当前是否在缩放窗口内
   // 长报告降采样阈值：超过此点数的报告，显示类目/系列数据等距抽稀到该点数（统计仍全量）
   var DISP_MAX_POINTS = 3000;
   // v66：像素 ↔ 类目索引换算必须使用与 ECharts grid 相同的左右边距。
@@ -211,7 +226,7 @@
                     ' → idx=' + idx + ' localX=' + Math.round(localX));
         if (idx === null || idx < 0) return;
         if (_pinIdx === idx) { console.log('[PerfCollect] 再点同点 → 解锁'); _pinUnlockAll(); }
-        else { console.log('[PerfCollect] 锁定 index=' + idx); _pinLockAll(idx, localX); }
+        else { console.log('[PerfCollect] 锁定 index=' + idx); _pinLockAll(idx); }
       });
       dom.addEventListener('dblclick', function () { console.log('[PerfCollect] 双击 → 解锁'); _pinUnlockAll(); });
     });
@@ -234,6 +249,35 @@
     var usable = width - padL - padR;
     if (!(usable > 0)) return padL;
     return padL + idx / (n - 1) * usable;
+  }
+
+  // v99：毫秒时间 → 类目轴连续索引。ECharts category 轴按采样点等距排布，
+  // 因此 Label 边界也必须先映射到“第几个采样点”，不能直接拿全程毫秒百分比。
+  // 非等间隔采样时在相邻点间线性插值，得到可与 dataZoom 共用的分数索引。
+  function timeToCategoryIndex(timesMs, ms) {
+    if (!timesMs || !timesMs.length || ms == null || !isFinite(Number(ms))) return null;
+    var value = Number(ms);
+    var n = timesMs.length;
+    if (n === 1 || value <= Number(timesMs[0])) return 0;
+    if (value >= Number(timesMs[n - 1])) return n - 1;
+    var lo = 0, hi = n - 1;
+    while (lo < hi - 1) {
+      var mid = (lo + hi) >> 1;
+      if (Number(timesMs[mid]) <= value) lo = mid; else hi = mid;
+    }
+    var a = Number(timesMs[lo]), b = Number(timesMs[hi]);
+    if (!isFinite(a) || !isFinite(b) || b <= a) return lo;
+    return lo + (value - a) / (b - a);
+  }
+
+  function zoomCategoryWindow(n, startPct, endPct) {
+    n = Math.max(0, Math.round(Number(n)) || 0);
+    if (n <= 1) return { start: 0, end: 0 };
+    var start = Math.max(0, Math.min(100, Number(startPct) || 0));
+    var endRaw = Number(endPct);
+    var end = isFinite(endRaw) ? Math.max(start, Math.min(100, endRaw)) : 100;
+    var last = n - 1;
+    return { start: start / 100 * last, end: end / 100 * last };
   }
 
   function _pinIndexAtLocal(chart, dom, x, y) {
@@ -269,10 +313,8 @@
   // v58：显示索引 → 全量索引（降采样后 _pinRows 仍为全量，快照取数需换算）
   function _pinFullIdx(idx) { return _dispIdx ? _dispIdx[idx] : idx; }
 
-  function _pinLockAll(idx, pxX) {
+  function _pinLockAll(idx) {
     _pinIdx = idx;
-    _pinWindowVisible = true;   // 锁定时默认在窗口内（随后缩放时由 _refreshPinAfterZoom 更新）
-    var localX = (typeof pxX === 'number' && isFinite(pxX)) ? pxX : null;
     _pinCharts.forEach(function (c) {
       if (!c) return;
       var dom = c.getDom();
@@ -282,17 +324,11 @@
         line.className = 'pin-line';
         dom.appendChild(line);
       }
-      // v22：蓝线直接用点击处像素定位（所见即所点）。
-      // 不再 dispatch showTip——白线/tooltip 完全交给 ECharts 默认跟随鼠标，
-      // 避免 showTip 拉取与鼠标移动抢位造成白线偏移。
-      if (localX !== null) {
-        var w = dom.clientWidth || dom.getBoundingClientRect().width;
-        line.style.left = Math.max(0, Math.min(Math.round(localX), w - 2)) + 'px';
-      } else {
-        _pinPlaceLine(c, line, idx);   // 兜底：用换算
-      }
+      // v99：点击只负责确定最近采样索引；蓝线必须回到该采样点的类目坐标。
+      // 原先保留原始点击像素会让蓝线与 ECharts 白线命中同一数据却不重叠。
+      _pinPlaceLine(c, line, idx);
     });
-    _pinShowData(idx, localX);   // 蓝线位置显示该模块 tooltip 风格数据浮层
+    _pinShowData(idx, null);   // 浮层与蓝线共同吸附到命中的采样点
     _pinNotify(_buildPinSnapshot(_pinRows[_pinFullIdx(idx)]));   // v52（需求 B）：锁定 → 通知快照条显示
   }
 
@@ -403,7 +439,8 @@
                  .filter(Boolean);
     if (!groups.length) return null;
     var t = row.t_ms != null ? (row.t_ms / 1000).toFixed(1) + 's' : '';
-    return { t: t, groups: groups, text: groups.map(function (g) { return g.text; }).join(' · ') };
+    return { t: t, t_ms: row.t_ms, groups: groups,
+             text: groups.map(function (g) { return g.text; }).join(' · ') };
   }
   function _pinShowData(idx, localX) {
     var row = _pinRows[_pinFullIdx(idx)];   // v58：显示索引 → 全量行
@@ -487,7 +524,6 @@
 
   function _pinUnlockAll() {
     _pinIdx = null;
-    _pinWindowVisible = true;   // v58：解锁复位窗口状态
     document.querySelectorAll('.pin-line').forEach(function (l) { l.style.left = '-9999px'; });
     document.querySelectorAll('.pin-tip').forEach(function (tip) { tip.style.display = 'none'; });
     document.querySelectorAll('.pin-data').forEach(function (pd) { pd.style.display = 'none'; });
@@ -505,6 +541,7 @@
   // v48（UI优化 3.2）：事件改 Pointer Events（mouse+touch 统一），触屏可用；
   //   不支持 PointerEvent 的环境回退原 mouse 事件。
   var _dz = { start: 0, end: 100, charts: [], rows: [], sliders: [], n: 0 };
+  var _zoomLabelTimeline = null;
 
   function createTimeSliders(charts, rows, mountEl) {
     var list = [];
@@ -710,19 +747,20 @@
       } catch (e) {}
     });
     _refreshPinAfterZoom();   // v58（任务1）：缩放/平移后重算锁定蓝线位置，所见=所报
+    if (_zoomLabelTimeline) {
+      renderLabelTimeline(_zoomLabelTimeline.elId, _zoomLabelTimeline.rows,
+                          _zoomLabelTimeline.annotations, _zoomLabelTimeline.options);
+    }
   }
 
-  // v58（任务1）：缩放/平移后按当前视图重定位锁定蓝线/浮层；锁定点被窗口排除则隐藏线、
-  // 快照条标注"窗口外"。数据仍取锁定时刻 _pinRows[_pinFullIdx(_pinIdx)]，语义不变。
+  // v100：缩放/平移后按当前视图重定位锁定蓝线/浮层；锁定点被窗口排除时只隐藏
+  // 图内元素，顶部锁定快照保持不变，避免追加/移除警告行导致整页上下抖动。
   function _refreshPinAfterZoom() {
     if (_pinIdx === null) return;
     var n = _dispIdx ? _dispIdx.length : _pinRows.length;
     if (!n) return;
-    // dataZoom 为百分比窗口 → 换算可见类目索引范围（近似，边界 1 点误差可接受）
-    var startIdx = Math.floor(_dz.start / 100 * n);
-    var endIdx = Math.ceil(_dz.end / 100 * n) - 1;
-    if (endIdx < startIdx) endIdx = startIdx;
-    var visible = _pinIdx >= startIdx && _pinIdx <= endIdx;
+    var windowIdx = zoomCategoryWindow(n, _dz.start, _dz.end);
+    var visible = _pinIdx >= windowIdx.start && _pinIdx <= windowIdx.end;
     _pinCharts.forEach(function (c) {
       if (!c) return;
       var dom = c.getDom();
@@ -737,16 +775,6 @@
         else tip.style.display = 'none';
       }
     });
-    // 仅在"可见↔窗口外"状态翻转时重通知快照条（避免拖动每帧重建 DOM）
-    if (visible !== _pinWindowVisible) {
-      _pinWindowVisible = visible;
-      var snap = _buildPinSnapshot(_pinRows[_pinFullIdx(_pinIdx)]);
-      if (snap && !visible) {
-        snap.groups = snap.groups.concat([{ name: '', text: '⚠ 锁定点已在当前缩放窗口外（数据仍为锁定时刻）' }]);
-        snap.text = snap.text + ' · 窗口外';
-      }
-      _pinNotify(snap);
-    }
   }
 
   function clearTimeSliders() {
@@ -965,6 +993,51 @@
     return opt;
   }
 
+  // v73：echarts.connect 跨图同步 showTip 时，部分版本只会把源图命中的
+  // 单个 seriesIndex 传给目标图。目标图虽然同一 dataIndex 上还有其他有效
+  // 序列，原生 tooltip 仍只显示这一项。这里根据目标图自己的 series data
+  // 重建当前采样点的完整 tooltip，不依赖联动事件携带了多少个 series。
+  function _tooltipEscape(v) {
+    return String(v == null ? '' : v)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function axisTooltipHtml(seriesList, params) {
+    var ps = Array.isArray(params) ? params : (params ? [params] : []);
+    if (!ps.length) return '';
+    var first = ps[0] || {};
+    var idx = Number(first.dataIndex);
+    if (!isFinite(idx) || idx < 0) return '';
+    idx = Math.floor(idx);
+    var axisLabel = first.axisValueLabel != null ? first.axisValueLabel : first.axisValue;
+    var items = [];
+    (seriesList || []).forEach(function (s) {
+      var raw = s && s.data ? s.data[idx] : null;
+      var value = raw && typeof raw === 'object' && raw.value != null ? raw.value : raw;
+      if (typeof value !== 'number' || !isFinite(value)) return;
+      items.push({ name: s.name || '', value: value, color: s.color || (s.lineStyle && s.lineStyle.color) || '#aaa' });
+    });
+    items.sort(function (a, b) { return b.value - a.value; });
+    var html = '<div>' + _tooltipEscape(axisLabel) + '</div>';
+    items.forEach(function (item) {
+      html += '<div style="display:flex;align-items:center;gap:7px;min-width:150px">' +
+        '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' +
+        _tooltipEscape(item.color) + '"></span><span style="flex:1">' +
+        _tooltipEscape(item.name) + '</span><b>' + item.value.toFixed(2) + '</b></div>';
+    });
+    return html;
+  }
+
+  function setMetricOption(chart, opt) {
+    if (opt && opt.tooltip) {
+      var tooltipSeries = opt.series || [];
+      opt.tooltip.formatter = function (params) { return axisTooltipHtml(tooltipSeries, params); };
+    }
+    chart.setOption(opt);
+  }
+
   function applyTime(charts, rows, elIds, idxArr) {
     var times = timeAxis(rows, idxArr);
     _catTimes = times;   // v58：缓存类目（供 pin 定位/点击换算，避免 getOption 深拷贝）
@@ -1007,7 +1080,7 @@
     var top = max(fps) || 60;
     var maxFps = Math.max(30, Math.ceil(top / 20) * 20);
     var step = Math.round(maxFps / 4 / 5) * 5 || 10;
-    chart.setOption({
+    setMetricOption(chart, {
       ...baseOption(zoom),
       series: [
         Object.assign({}, baseLine, { name: 'FPS', data: fps, yAxisIndex: 0, color: COLORS.fps, lineStyle: { width: 1.6, color: COLORS.fps } }),
@@ -1026,7 +1099,7 @@
     var p95 = series(rows, function (r) { return fpsMetric(r, 'frame_p95_ms'); }, idxArr);
     var mx = series(rows, function (r) { return fpsMetric(r, 'frame_max_ms'); }, idxArr);
     var windowed = hasFpsWindowSummary(rows);
-    chart.setOption({
+    setMetricOption(chart, {
       ...baseOption(zoom),
       yAxis: { type: 'value', name: 'ms', nameLocation: 'middle', nameGap: 36,
                min: 0, axisLabel: { fontSize: 10 } },
@@ -1059,7 +1132,7 @@
         lineStyle: { width: 1.4, color: COLORS.cpu_proc_of_total },
       }));
     }
-    chart.setOption({
+    setMetricOption(chart, {
       ...baseOption(zoom),
       yAxis: { type: 'value', name: '%', nameLocation: 'middle', nameGap: 36,
                min: 0, axisLabel: { fontSize: 10 } },
@@ -1074,7 +1147,7 @@
     var rss = series(rows, function (r) {
       return r.mem && r.mem.vmrss_kb != null ? Math.round(r.mem.vmrss_kb / 1024 * 10) / 10 : null;
     }, idxArr);
-    chart.setOption({
+    setMetricOption(chart, {
       ...baseOption(zoom),
       yAxis: { type: 'value', name: 'MB', nameLocation: 'middle', nameGap: 36,
                min: 0, axisLabel: { fontSize: 10 } },
@@ -1088,7 +1161,7 @@
   function renderNet(chart, rows, zoom, idxArr) {
     var rx = series(rows, function (r) { return r.net ? r.net.rx_kbps : null; }, idxArr);
     var tx = series(rows, function (r) { return r.net ? r.net.tx_kbps : null; }, idxArr);
-    chart.setOption({
+    setMetricOption(chart, {
       ...baseOption(zoom),
       yAxis: { type: 'value', name: 'KB/s', nameLocation: 'middle', nameGap: 36,
                min: 0, axisLabel: { fontSize: 10 } },
@@ -1106,7 +1179,7 @@
     // 会把曲线截断贴底；取数据最小值-2，无数据回退 25
     var tMin = min(temp);
     var tempAxisMin = (tMin != null) ? Math.floor(tMin - 2) : 25;
-    chart.setOption({
+    setMetricOption(chart, {
       ...baseOption(zoom),
       yAxis: [
         { type: 'value', name: '°C', nameLocation: 'middle', nameGap: 36,
@@ -1519,6 +1592,286 @@
     } catch (e) {}
   }
 
+  // ---------------- Label 时间映射（仅供紧凑 Label 条；不再覆盖图表） ----------------
+  function _annotationColor(color, alpha) {
+    var m = /^#([0-9a-f]{6})$/i.exec(String(color || ''));
+    if (!m) return 'rgba(79,195,247,' + alpha + ')';
+    var n = parseInt(m[1], 16);
+    return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' +
+      (n & 255) + ',' + alpha + ')';
+  }
+
+  function annotationMarkAreas(rows, annotations, showLabels) {
+    if (!rows || !rows.length) return [];
+    var times = rows.map(function (r) { return r.t_ms; });
+    var first = times[0], last = times[times.length - 1];
+    var data = [];
+    (annotations || []).slice(0, 200).forEach(function (a) {
+      var start = Number(a && a.start_ms);
+      var end = a && a.end_ms == null ? last : Number(a && a.end_ms);
+      if (!isFinite(start) || !isFinite(end) || end <= start || end < first || start > last) return;
+      var x1 = nearestCat(times, Math.max(first, start));
+      var x2 = nearestCat(times, Math.min(last, end));
+      if (x1 == null || x2 == null) return;
+      var text = String(a.text || '').slice(0, 120);
+      data.push([{
+        xAxis: x1,
+        name: text,
+        itemStyle: { color: _annotationColor(a.color, 0.18) },
+        label: { show: !!showLabels, formatter: text, color: a.color || '#ffffff',
+                 fontSize: 10, position: 'insideTop' },
+      }, { xAxis: x2 }]);
+    });
+    return data;
+  }
+
+  function renderAnnotations(charts, rows, annotations) {
+    // v96：Label 色带不再贯穿图表。保留此兼容入口用于清除同页面旧状态，
+    // 避免热更新/切报告时遗留 v95 的 markArea。
+    if (!charts) return;
+    Object.keys(charts).forEach(function (key) {
+      var chart = charts[key];
+      if (!chart) return;
+      var dom = chart.getDom && chart.getDom();
+      if (dom && dom.parentElement && dom.parentElement.style.display === 'none') return;
+      try {
+        chart.setOption({ series: [{
+          id: 'perfcollect-annotation-bands', type: 'line', data: [], silent: true,
+          showSymbol: false, lineStyle: { opacity: 0 }, tooltip: { show: false },
+          markArea: { silent: true, data: [] },
+        }] });
+      } catch (e) {}
+    });
+  }
+
+  function renderAnnotationList(elId, annotations, onDelete) {
+    var el = document.getElementById(elId);
+    if (!el) return;
+    while (el.firstChild) el.removeChild(el.firstChild);
+    var items = annotations || [];
+    if (!items.length) { el.style.display = 'none'; return; }
+    items.forEach(function (a) {
+      var chip = document.createElement('span');
+      chip.className = 'annotation-chip';
+      chip.style.borderColor = a.color || '#4fc3f7';
+      var dot = document.createElement('i');
+      dot.style.background = a.color || '#4fc3f7';
+      var start = (Number(a.start_ms) / 1000).toFixed(1);
+      var end = a.end_ms == null ? '末尾' : (Number(a.end_ms) / 1000).toFixed(1) + 's';
+      chip.appendChild(dot);
+      chip.appendChild(document.createTextNode(start + 's–' + end + ' · ' + String(a.text || '')));
+      if (typeof onDelete === 'function') {
+        var remove = document.createElement('button');
+        remove.type = 'button';
+        remove.title = '删除这条区间备注';
+        remove.textContent = '×';
+        remove.addEventListener('click', function () { onDelete(a); });
+        chip.appendChild(remove);
+      }
+      el.appendChild(chip);
+    });
+    el.style.display = '';
+  }
+
+  function _startLabelRename(segment) {
+    var item = segment && segment.__labelItem;
+    var owner = segment && segment.parentNode && segment.parentNode.parentNode;
+    var options = owner && owner.__labelOptions;
+    if (!item || !item.id || !options || typeof options.onRename !== 'function') return;
+    var existing = segment.querySelector('input');
+    if (existing) { existing.focus(); return; }
+    var labelName = segment.querySelector('.label-segment-name');
+    var edit = segment.querySelector('.label-segment-edit');
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.maxLength = 120;
+    input.value = String(item.text || '');
+    if (labelName) labelName.style.display = 'none';
+    if (edit) edit.style.display = 'none';
+    segment.appendChild(input);
+    var done = false;
+    function finish(save) {
+      if (done) return;
+      done = true;
+      var value = input.value.trim();
+      if (input.parentNode) input.parentNode.removeChild(input);
+      if (labelName) { labelName.style.display = ''; labelName.textContent = save && value ? value : String(item.text || 'Label'); }
+      if (edit) edit.style.display = '';
+      if (save && value && value !== item.text) options.onRename(item, value);
+    }
+    input.addEventListener('click', function (e) { e.stopPropagation(); });
+    input.addEventListener('keydown', function (e) {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', function () { finish(true); });
+    input.focus();
+    input.select();
+  }
+
+  function _newLabelSegment(track, key) {
+    var segment = document.createElement('span');
+    segment.dataset.labelKey = key;
+    var labelName = document.createElement('span');
+    labelName.className = 'label-segment-name';
+    segment.appendChild(labelName);
+    var edit = document.createElement('span');
+    edit.className = 'label-segment-edit';
+    edit.textContent = '✎';
+    segment.appendChild(edit);
+    segment.addEventListener('click', function (e) {
+      e.stopPropagation();
+      _startLabelRename(segment);
+    });
+    segment.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault(); e.stopPropagation(); _startLabelRename(segment);
+      }
+    });
+    track.appendChild(segment);
+    return segment;
+  }
+
+  function _alignLabelTrackToChart(el, track, chartId) {
+    // 先清掉上次宽度下的动态边距，再量取真实布局；getBoundingClientRect 会同步布局。
+    track.style.marginLeft = '0px';
+    track.style.marginRight = '0px';
+    if (!chartId || typeof echarts === 'undefined') return;
+    var chartEl = document.getElementById(chartId);
+    var chart = chartEl && echarts.getInstanceByDom(chartEl);
+    if (!chart || !chartEl.offsetWidth) return;
+    var base = track.getBoundingClientRect();
+    var chartRect = chartEl.getBoundingClientRect();
+    // Label 轨道的左右边界与 ECharts grid 完全重合，而非与图表卡片外框重合。
+    var targetLeft = chartRect.left + GRID_PAD.left;
+    var targetRight = chartRect.right - GRID_PAD.right;
+    var leftGap = Math.max(0, targetLeft - base.left);
+    var rightGap = Math.max(0, base.right - targetRight);
+    track.style.marginLeft = leftGap + 'px';
+    track.style.marginRight = rightGap + 'px';
+  }
+
+  // 按 Label ID 增量更新位置/宽度：实时采样继续推动当前段增长，正在输入的节点不销毁。
+  // 分段使用轨道右侧独立按钮；点击任意已落盘色块只负责改名，彻底隔离两种操作。
+  function renderLabelTimeline(elId, rows, annotations, options) {
+    var el = document.getElementById(elId);
+    if (!el) return;
+    options = options || {};
+    if (options.followZoom) {
+      _zoomLabelTimeline = { elId: elId, rows: rows,
+                             annotations: annotations, options: options };
+    }
+    el.__labelOptions = options;
+    var track = el.querySelector('.label-track');
+    if (!track) {
+      track = document.createElement('div');
+      track.className = 'label-track';
+      el.appendChild(track);
+    }
+    el.style.display = '';
+
+    var split = el.querySelector('.label-split-button');
+    if (typeof options.onPin === 'function') {
+      if (!split) {
+        split = document.createElement('button');
+        split.type = 'button';
+        split.className = 'label-split-button';
+        split.textContent = '＋ 分段';
+        split.title = '在当前最新采样时刻切换到下一个 Label';
+        split.addEventListener('click', function (e) {
+          e.stopPropagation();
+          var current = el.__labelOptions;
+          if (current && typeof current.onPin === 'function') current.onPin();
+        });
+        el.appendChild(split);
+      }
+    } else if (split && split.parentNode) {
+      split.parentNode.removeChild(split);
+    }
+
+    var items = annotations || [];
+    if (!items.length && rows && rows.length && typeof options.onPin === 'function') {
+      items = [{ start_ms: rows[0].t_ms, end_ms: null,
+                 text: 'Label1', color: '#ef5664' }];
+    }
+    var empty = track.querySelector('.label-track-empty');
+    if (!rows || !rows.length || !items.length) {
+      track.querySelectorAll('.label-segment').forEach(function (node) { node.remove(); });
+      if (!empty) {
+        empty = document.createElement('span');
+        empty.className = 'label-track-empty';
+        track.appendChild(empty);
+      }
+      empty.textContent = typeof options.onPin === 'function' ? '等待首个采样点…' : '暂无 Label';
+      el.style.display = '';
+      return;
+    }
+    if (empty && empty.parentNode) empty.parentNode.removeChild(empty);
+
+    _alignLabelTrackToChart(el, track, options.alignChartId);
+
+    var existing = {};
+    track.querySelectorAll('.label-segment').forEach(function (node) {
+      existing[node.dataset.labelKey] = node;
+    });
+    var keep = {};
+    var fullFirst = Number(rows[0].t_ms), fullLast = Number(rows[rows.length - 1].t_ms);
+    var fullSpan = Math.max(1, fullLast - fullFirst);
+    var displayTimes = _dispIdx
+      ? _dispIdx.map(function (i) { return Number(rows[i] && rows[i].t_ms); })
+      : rows.map(function (r) { return Number(r && r.t_ms); });
+    var indexWindow = options.followZoom
+      ? zoomCategoryWindow(displayTimes.length, _dz.start, _dz.end)
+      : null;
+    var indexSpan = indexWindow ? Math.max(0.000001, indexWindow.end - indexWindow.start) : 0;
+    var first = options.followZoom && displayTimes.length
+      ? displayTimes[Math.max(0, Math.floor(indexWindow.start))] : fullFirst;
+    var last = options.followZoom && displayTimes.length
+      ? displayTimes[Math.min(displayTimes.length - 1, Math.ceil(indexWindow.end))] : fullLast;
+    var spanMs = Math.max(1, last - first);
+    items.forEach(function (a, index) {
+      var start = Number(a && a.start_ms);
+      var end = a && a.end_ms == null ? fullLast : Number(a && a.end_ms);
+      if (!isFinite(start) || !isFinite(end)) return;
+      var leftPct, rightPct;
+      if (indexWindow) {
+        var startIndex = timeToCategoryIndex(displayTimes, start);
+        var endIndex = timeToCategoryIndex(displayTimes, end);
+        if (startIndex == null || endIndex == null || endIndex <= indexWindow.start ||
+            startIndex >= indexWindow.end) return;
+        leftPct = (Math.max(indexWindow.start, startIndex) - indexWindow.start) * 100 / indexSpan;
+        rightPct = (Math.min(indexWindow.end, endIndex) - indexWindow.start) * 100 / indexSpan;
+      } else {
+        if (end <= first || start >= last) return;
+        leftPct = (Math.max(first, start) - first) * 100 / spanMs;
+        rightPct = (Math.min(last, end) - first) * 100 / spanMs;
+      }
+      var key = String(a.id || ('preview-' + index));
+      keep[key] = true;
+      var segment = existing[key] || _newLabelSegment(track, key);
+      segment.__labelItem = a;
+      segment.className = 'label-segment' + (a.end_ms == null ? ' active' : '');
+      var left = Math.max(0, Math.min(100, leftPct));
+      var right = Math.max(0, Math.min(100, rightPct));
+      segment.style.left = left + '%';
+      segment.style.width = Math.max(1.5, right - left) + '%';
+      segment.style.background = a.color || '#4fc3f7';
+      var canRename = !!(a.id && typeof options.onRename === 'function');
+      segment.classList.toggle('editable', canRename);
+      segment.tabIndex = canRename ? 0 : -1;
+      segment.title = canRename ? '点击色块修改名称' : String(a.text || 'Label');
+      var labelName = segment.querySelector('.label-segment-name');
+      var edit = segment.querySelector('.label-segment-edit');
+      if (!segment.querySelector('input') && labelName) labelName.textContent = String(a.text || 'Label');
+      if (edit) edit.style.display = canRename ? '' : 'none';
+    });
+    Object.keys(existing).forEach(function (key) {
+      if (!keep[key] && existing[key].parentNode) existing[key].parentNode.removeChild(existing[key]);
+    });
+    el.style.display = '';
+  }
+
   // ---------------- 事件标注层（2026-08-14 模式1：logcat console.log 叠加） ----------------
   // 把事件按 t_ms 映射到 x 轴类目值，在每张图画竖线标注；
   // 第一张图（FPS）附带文字标签，其余图只画线（避免标签 6 次重复）。
@@ -1594,9 +1947,15 @@
     createTimeSliders: createTimeSliders,
     clearTimeSliders: clearTimeSliders,
     renderEvents: renderEvents,
+    renderAnnotations: renderAnnotations,
+    renderAnnotationList: renderAnnotationList,
+    renderLabelTimeline: renderLabelTimeline,
+    annotationMarkAreas: annotationMarkAreas,
     nearestCat: nearestCat,   // 纯函数，导出供 tests/test_nearest_cat.js 断言
     pixelToIdx: pixelToIdx,   // v66：grid-aware 像素 → 显示索引（纯函数，供回归测试）
     idxToPixel: idxToPixel,   // v66：显示索引 → grid 内像素（与 pixelToIdx 同一套数学）
+    timeToCategoryIndex: timeToCategoryIndex, // v99：Label 时间 → 连续类目索引
+    zoomCategoryWindow: zoomCategoryWindow,   // v99：dataZoom 百分比 → 连续类目窗口
     fpsMetric: fpsMetric,     // v76：新 schema 短窗聚合优先、旧数据字段回退（纯函数）
     metricIsFresh: metricIsFresh, // v79：重复 latest 快照不重复进入统计
     setCores: setCores,       // 注入核数（实时看板 /api/status；历史报告 meta 行）
@@ -1616,6 +1975,7 @@
     completenessGrade: completenessGrade,
     _reasonText: _reasonText,   // 纯函数，供错误码文案回归测试
     fpsQualityNote: fpsQualityNote, // FPS 低置信/钳制注记（纯函数）
+    axisTooltipHtml: axisTooltipHtml, // 跨图联动时按 dataIndex 重建完整序列 tooltip
     _statText: statText,
   };
 })();

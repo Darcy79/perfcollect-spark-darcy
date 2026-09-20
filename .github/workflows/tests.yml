@@ -35,10 +35,10 @@ jobs:
             collector\pidresolver.py collector\probe.py collector\apk_label.py `
             collector\logcat.py collector\export_report.py collector\dashboard.py `
             collector\data_health.py collector\sampling.py collector\target_context.py `
-            collector\target_monitor.py `
+            collector\target_monitor.py collector\target_switcher.py `
             collector\jsonl_writer.py collector\runtime_health.py `
             collector\capture_session.py collector\console_output.py `
-            collector\event_sink.py `
+            collector\event_sink.py collector\timeline_annotations.py `
             tools\check_consistency.py tools\browser_smoke_server.py `
             collector\metrics\fps.py collector\metrics\cpu.py `
             collector\metrics\mem.py collector\metrics\network.py `

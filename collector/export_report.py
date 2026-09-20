@@ -22,6 +22,7 @@ import os
 import sys
 
 from data_health import scan_rows, health_summary
+from timeline_annotations import AnnotationStore
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(SCRIPT_DIR, "..", "web")
@@ -179,7 +180,7 @@ def export_xlsx(rows, out_path):
     return len(flat)
 
 
-def export_html(rows, out_path, events=None):
+def export_html(rows, out_path, events=None, annotations=None):
     """自包含 HTML：内联 echarts + app.js + 样式 + 数据（+ 可选 logcat 事件标注）。"""
     def read(p):
         with open(p, encoding="utf-8") as f:
@@ -230,6 +231,10 @@ def export_html(rows, out_path, events=None):
         except Exception:
             pass
     events_json = script_safe_json(events, ensure_ascii=False)
+    if annotations is None:
+        annotations = AnnotationStore.load_path(
+            os.path.splitext(out_path)[0] + ".annotations.json")
+    annotations_json = script_safe_json(annotations, ensure_ascii=False)
     cores_json = script_safe_json(cores)   # None → "null"，JS 侧 falsy
 
     html = f"""<!DOCTYPE html>
@@ -246,6 +251,7 @@ def export_html(rows, out_path, events=None):
   <div id="status-bar"><span id="report-meta">{os.path.basename(out_path)} · {len(rows)} 个采样点 · 本地生成</span></div>
 </header>
 <main>
+  <div id="report-label-timeline" class="label-timeline report-label-compact" style="display:none"></div>
   <div class="summary" id="report-summary"></div>
   <div class="completeness" id="report-completeness" style="display:none"></div>
   {health_banner}
@@ -283,6 +289,9 @@ def export_html(rows, out_path, events=None):
   window.PerfCharts.createTimeSliders(charts, ROWS);
   var EVENTS = {events_json};
   if (EVENTS && EVENTS.length) window.PerfCharts.renderEvents(charts, ROWS, EVENTS);
+  var ANNOTATIONS = {annotations_json};
+  window.PerfCharts.renderLabelTimeline('report-label-timeline', ROWS, ANNOTATIONS,
+                                        {{alignChartId: 'chart-fps'}});
 }})();
 </script>
 </body>
@@ -330,7 +339,9 @@ def main():
                                 pass
             except Exception:
                 pass
-        n = export_html(rows, out, events)
+        annotations = AnnotationStore.load_path(
+            os.path.splitext(args.input)[0] + ".annotations.json")
+        n = export_html(rows, out, events, annotations)
     print(f"[+] 已导出 {n} 个采样点 -> {os.path.abspath(out)}")
     if args.format == "html":
         print("[+] 双击该 HTML 即可在浏览器查看（自包含，可任意拷贝分享）")

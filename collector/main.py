@@ -33,6 +33,7 @@ from device_info import probe_device_info
 from sampling import MetricMailbox, SampleAggregator, SamplerScheduler
 from target_context import TargetContext
 from target_monitor import TargetMismatchTracker
+from target_switcher import TargetSwitcher
 from jsonl_writer import JsonlWriter
 from capture_session import CaptureSession
 from console_output import format_sample_status
@@ -404,67 +405,19 @@ def main():
     # 这里只在**用户确认、采集真正开始后**更新状态——向导模式下此前不产生任何输出文件。
     if web:
         web.set_status(running=True, device=adb.serial, pid=pid, run_id=run_id,
+                       report_name=(run_id + "/perfcollect_" + run_id + ".jsonl"),
                        target=package, process_pattern=process_pattern,
                        cores=cores, device_info=device_info,
                        started_at=datetime.now().strftime("%H:%M:%S"),
                        phase="running",
                        target_source=("user" if chosen_pid else "auto"))
 
-        # ---- 看板下拉"切换被测应用"回调（方案 A 2026-08-20） ----
-        # 热切换：不重启进程，重建绑定目标进程的采集器即可；下一次采样自动走新目标。
-        def _apply_target(new_package, new_pattern=""):
-            """按看板请求切换被测目标（重建采集器 + 更新进程/状态 + 持久化配置）。"""
-            new_package = (new_package or "").strip()
-            if not new_package:
-                return False, "包名为空"
-            # 1) 持久化到当前 config：下次双击 bat 启动默认用上次选的目标
-            try:
-                cfg["package"] = new_package
-                cfg["process_pattern"] = new_pattern or ""
-                with open(args.config, "w", encoding="utf-8") as f:
-                    json.dump(cfg, f, ensure_ascii=False, indent=2)
-            except Exception as e:
-                print(f"[!] 目标持久化失败（不影响本次切换）: {e}")
-            # 2) 重建采集器：fps/cpu/mem/net 都绑定 resolver 或 package，必须重建；
-            #    therm（电池温度）不依赖目标，复用。worker 每轮从 TargetContext 取新实例。
-            try:
-                new_resolver = PidResolver(adb, new_package, new_pattern)
-                new_pid = new_resolver.resolve()
-                switch_event = {
-                    "ts": round(time.time(), 3),
-                    "event": "target_switch",
-                    "to": new_package,
-                    "process_pattern": new_pattern or "",
-                }
-                state = target_context.switch_target(
-                    new_package, new_pattern, new_resolver, new_pid,
-                    {
-                        "fps": FpsCollector(adb, new_package, new_pattern),
-                        "cpu": CpuCollector(adb, new_resolver),
-                        "mem": MemCollector(
-                            adb, new_resolver, new_package, min_interval=0),
-                        "net": NetworkCollector(adb, new_resolver),
-                    },
-                    metric_mailbox,
-                    before_switch=lambda _old: jsonl_writer.write(switch_event),
-                )
-                web.clear_latest()   # 清空实时缓冲：新目标从零开始显示
-                web.set_status(pid=state.pid, target=state.package,
-                               process_pattern=state.process_pattern)
-                # 3) 事件已在 TargetContext 持锁期间先入队；这里等待落盘后再响应。
-                try:
-                    jsonl_writer.flush()
-                except Exception as e:
-                    print(f"[!] 目标切换标记写入失败: {e}")
-                msg = f"目标已切换为 {new_package}"
-                if not state.pid:
-                    msg += "（未找到进程，请确认应用已在前台打开）"
-                print(f"[>] {msg}")
-                return True, msg
-            except Exception as e:
-                return False, f"切换失败: {e}"
-
-        web.set_switch_callback(_apply_target)
+        # 热切换编排已从 main.py 收口到独立组件；目标相关采集器重建，
+        # therm 保留，切换事件仍在新目标可见前进入唯一 JsonlWriter。
+        target_switcher = TargetSwitcher(
+            adb, cfg, args.config, target_context, metric_mailbox,
+            jsonl_writer, web)
+        web.set_switch_callback(target_switcher.apply)
 
     if session.is_stopping:
         _stop_event_capture()

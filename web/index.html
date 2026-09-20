@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PerfCollect 自研工具 · 实时看板</title>
-<link rel="stylesheet" href="/assets/style.css?v=72">
+<link rel="stylesheet" href="/assets/style.css?v=81">
 </head>
 <body>
 <header>
@@ -49,6 +49,14 @@
 
 <main>
   <div class="drag-hint">↕ 拖动卡片可调整顺序（自动记住）</div>
+  <div id="live-annotation-panel" class="annotation-panel">
+    <div class="annotation-head">
+      <b>场景 Label</b>
+      <span id="ann-state">当前 Label1 · 点击右侧“＋ 分段”切换到 Label2</span>
+    </div>
+    <div id="live-label-timeline" class="label-timeline"></div>
+    <div class="annotation-hint">点击“＋ 分段”自动切换颜色；点击任意 Label 色块即可改名。</div>
+  </div>
   <section class="chart-card">
     <div class="chart-head"><h2>FPS / Jank<span class="h2-q" title="FPS = SurfaceFlinger 上屏帧率（受屏幕刷新率封顶：60Hz 屏≤60）。引擎/开发者工具显示的多为「渲染循环帧率」（可达 61~63），两者口径不同、数值对不上属正常，非采集异常。详见 指标说明.md「一、1 口径对比」">?</span></h2><div id="stat-fps" class="stat-line"></div></div>
     <div id="chart-fps" class="chart"></div>
@@ -79,8 +87,8 @@
   <span>自研 PerfCollect · 数据仅存本地（output/*.jsonl）· <a href="/report.html">历史报告 →</a></span>
 </footer>
 
-<script src="/assets/echarts.min.js?v=72"></script>
-<script src="/assets/app.js?v=72"></script>
+<script src="/assets/echarts.min.js?v=81"></script>
+<script src="/assets/app.js?v=81"></script>
 <script>
 (function () {
   var charts = { fps: null, frametime: null, cpu: null, mem: null, net: null, temp: null };
@@ -91,14 +99,20 @@
   var appList = [];           // 已安装应用缓存
   var cores = null;           // 设备核数（/api/status），供 CPU 图"进程占整机%"曲线
   var lastRunId = null;       // v48（UI优化 4.4）：本次采集 run_id，停止后拼"查看本次报告"链接
+  var currentReportName = '';
+  var annotations = [];
+  var annotationBusy = false;
 
   function init() {
-    charts.fps = window.PerfCharts.makeChart('chart-fps');
-    charts.frametime = window.PerfCharts.makeChart('chart-frametime');
-    charts.cpu = window.PerfCharts.makeChart('chart-cpu');
-    charts.mem = window.PerfCharts.makeChart('chart-mem');
-    charts.net = window.PerfCharts.makeChart('chart-net');
-    charts.temp = window.PerfCharts.makeChart('chart-temp');
+    charts.fps = window.PerfCharts.makeChart('chart-fps', 'live');
+    charts.frametime = window.PerfCharts.makeChart('chart-frametime', 'live');
+    charts.cpu = window.PerfCharts.makeChart('chart-cpu', 'live');
+    charts.mem = window.PerfCharts.makeChart('chart-mem', 'live');
+    charts.net = window.PerfCharts.makeChart('chart-net', 'live');
+    charts.temp = window.PerfCharts.makeChart('chart-temp', 'live');
+    window.PerfCharts.enableLink('live');
+    window.PerfCharts.enableClickPin('main');
+    initAnnotations();
     initTarget();
     initWizard();   // v59：启动向导按钮绑定
     refreshStatus();
@@ -115,10 +129,85 @@
     if (!rows.length) return;
     window.PerfCharts.renderAll(charts, rows);
     window.PerfCharts.updateStats(charts, rows);
+    window.PerfCharts.setPinData(rows);
+    renderAnnotationState();
     if (startedAt) {
       var secs = Math.round((rows[rows.length - 1].t_ms || 0) / 1000);
       document.getElementById('st-elapsed').textContent = '时长: ' + secs + 's';
     }
+  }
+
+  // ---------------- 实时一键 Label 分段 ----------------
+  function annEl(id) { return document.getElementById(id); }
+
+  function annotationMessage(text, error) {
+    var el = annEl('ann-state');
+    el.textContent = text;
+    el.className = error ? 'annotation-error' : '';
+  }
+
+  function loadAnnotations() {
+    var name = currentReportName;
+    if (!name) { annotations = []; renderAnnotationState(); return; }
+    fetch('/api/annotations?name=' + encodeURIComponent(name))
+      .then(function (r) { return r.json(); })
+      .then(function (items) {
+        if (name !== currentReportName) return;
+        annotations = Array.isArray(items) ? items : [];
+        renderAnnotationState();
+      }).catch(function () {});
+  }
+
+  function renderAnnotationState() {
+    window.PerfCharts.renderLabelTimeline('live-label-timeline', rows, annotations, {
+      onPin: pinLabel,
+      onRename: renameLabel,
+    });
+  }
+
+  function pinLabel() {
+    if (annotationBusy || !currentReportName || !rows.length) {
+      if (!currentReportName || !rows.length) annotationMessage('等待采集数据后即可打点', true);
+      return;
+    }
+    var atMs = rows[rows.length - 1].t_ms;
+    var qs = new URLSearchParams({
+      name: currentReportName,
+      action: 'pin',
+      at_ms: atMs,
+    });
+    annotationBusy = true;
+    fetch('/api/annotations?' + qs.toString(), { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        annotationBusy = false;
+        if (!res || !res.ok) { annotationMessage((res && res.error) || '保存失败', true); return; }
+        annotations = Array.isArray(res.annotations) ? res.annotations : annotations.concat([res.annotation]);
+        renderAnnotationState();
+        annotationMessage(res.annotation.text + ' 已开始 · 点击“＋ 分段”可继续切换');
+      }).catch(function () {
+        annotationBusy = false;
+        annotationMessage('打点失败：看板服务不可用', true);
+      });
+  }
+
+  function renameLabel(item, text) {
+    if (!currentReportName || !item || !item.id) return;
+    var qs = new URLSearchParams({
+      name: currentReportName, action: 'rename', id: item.id, text: text,
+    });
+    fetch('/api/annotations?' + qs.toString(), { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (!res || !res.ok) { annotationMessage((res && res.error) || '改名失败', true); renderAnnotationState(); return; }
+        annotations = Array.isArray(res.annotations) ? res.annotations : annotations;
+        renderAnnotationState();
+        annotationMessage('已改名为 ' + res.annotation.text);
+      }).catch(function () { annotationMessage('改名失败：看板服务不可用', true); renderAnnotationState(); });
+  }
+
+  function initAnnotations() {
+    renderAnnotationState();
   }
 
   function startStream() {
@@ -310,6 +399,13 @@
       document.getElementById('st-pid').textContent = '进程: ' + (s.pid || '-');
       document.getElementById('st-run').textContent = '本次: ' + (s.run_id || '-');
       if (s.run_id) lastRunId = s.run_id;   // v48（UI优化 4.4）：记住本次 run，供停止后直达链接
+      var nextReportName = s.report_name || '';
+      if (nextReportName !== currentReportName) {
+        currentReportName = nextReportName;
+        annotations = [];
+        renderAnnotationState();
+        loadAnnotations();
+      }
       // 数据目录常驻显示（打包后改动 P0：用户随时知道数据存哪）
       document.getElementById('st-outdir').textContent = '数据: ' + (s.outdir || '-');
       var pill = document.getElementById('st-state');

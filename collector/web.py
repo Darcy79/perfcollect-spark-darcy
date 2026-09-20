@@ -7,16 +7,18 @@ web.add_sample(row)，页面通过轮询 /api/latest 实时刷新。
 端点：
     GET /                    实时看板页
     GET /report.html         历史报告页
-    GET /assets/*            静态文件（echarts.min.js / app.js / style.css）
+    GET /assets/*            静态文件（echarts.min.js / app.js / report.js / style.css）
     GET /api/status          采集状态 {running, device, pid, run_id, outdir, ...}
     GET /api/latest          最近采样点（环形缓冲，最多 300 点）
     GET /api/runs            output 目录历史 jsonl 列表（行数按 mtime/size 缓存）
     GET /api/report?name=xx  指定历史报告完整数据（JSON 数组，按 mtime 缓存）
     GET /api/events?name=xx  logcat 事件标注列表
+    GET /api/annotations?name=xx  性能区间备注列表
     POST /api/stop           停止采集（复用首次 Ctrl+C 的完整停止路径）
     POST /api/shutdown       彻底退出程序（停止采集 + 结束进程）
     POST /api/switch-target  热切换被测应用
     POST /api/rename         记录备注/重命名
+    POST /api/annotations    新增/删除性能区间备注
 """
 
 import json
@@ -31,6 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 from apk_label import get_apk_label
+from timeline_annotations import AnnotationStore
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "web")
 RING_SIZE = 300  # 实时看板保留最近 300 个采样点
@@ -106,7 +109,7 @@ class WebServer:
         self.latest = []            # 环形缓冲
         self._seq = 0               # 采样序号：SSE 用它作增量游标（替代 count）
         self.status = {"running": False, "device": "", "pid": None,
-                       "run_id": "", "started_at": None,
+                       "run_id": "", "report_name": "", "started_at": None,
                        "target": None, "process_pattern": "",
                        "outdir": os.path.abspath(output_dir)}
         self.adb = adb              # 采集器注入的 adb 实例（离线看板为 None）
@@ -157,6 +160,7 @@ class WebServer:
         self._probe_lock = threading.Lock()
         # 用户"开始采集"请求：/api/start 写入，main.py 用 take_start_request() 轮询取走
         self._start_req = None
+        self.annotations = AnnotationStore(self.output_dir)
 
     # ---------------- 采集器调用 ----------------
     def add_sample(self, row):
@@ -530,6 +534,10 @@ class WebServer:
                     qs = parse_qs(parsed.query)
                     name = (qs.get("name") or [""])[0]
                     self._send_json_api(lambda: self._load_events(name))
+                elif path == "/api/annotations":
+                    qs = parse_qs(parsed.query)
+                    name = (qs.get("name") or [""])[0]
+                    self._send_json_api(lambda: server.annotations.load(name))
                 elif path == "/api/raw":
                     # UI优化 4.1：伺服 output 下采集结束时自动生成的自包含 HTML 报告
                     # （只读，防穿越校验与 _load_report 同口径），供列表"📄 打开报告"新窗口分享
@@ -572,6 +580,37 @@ class WebServer:
                     newname = (qs.get("newname") or [""])[0]
                     ok, err = self._rename_run(name, newname)
                     self._send(200, json.dumps({"ok": ok, "error": err}, ensure_ascii=False))
+                elif parsed.path == "/api/annotations":
+                    name = (qs.get("name") or [""])[0]
+                    action = (qs.get("action") or ["create"])[0]
+                    try:
+                        if action == "pin":
+                            item, items = server.annotations.pin(
+                                name, (qs.get("at_ms") or [""])[0])
+                            payload = {"ok": True, "annotation": item,
+                                       "annotations": items}
+                        elif action == "rename":
+                            item, items = server.annotations.rename(
+                                name, (qs.get("id") or [""])[0],
+                                (qs.get("text") or [""])[0])
+                            payload = {"ok": True, "annotation": item,
+                                       "annotations": items}
+                        elif action == "delete":
+                            server.annotations.delete(
+                                name, (qs.get("id") or [""])[0])
+                            payload = {"ok": True}
+                        else:
+                            item = server.annotations.create(
+                                name,
+                                (qs.get("start_ms") or [""])[0],
+                                (qs.get("end_ms") or [""])[0],
+                                (qs.get("text") or [""])[0],
+                                (qs.get("color") or [""])[0],
+                            )
+                            payload = {"ok": True, "annotation": item}
+                    except Exception as e:
+                        payload = {"ok": False, "error": str(e)}
+                    self._send(200, json.dumps(payload, ensure_ascii=False))
                 elif parsed.path == "/api/switch-target":
                     package = (qs.get("package") or [""])[0].strip()
                     pattern = (qs.get("process_pattern") or [""])[0].strip()
