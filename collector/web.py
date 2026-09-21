@@ -25,8 +25,12 @@ import json
 import os
 import random
 import re
+import socket
 import threading
 import time
+import urllib.error
+import urllib.request
+import webbrowser
 from collections import OrderedDict
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -39,6 +43,47 @@ WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "web")
 RING_SIZE = 300  # 实时看板保留最近 300 个采样点
 # 已装应用 label 缓存（避免每次下拉都逐包 aapt 解析）：按设备序列号分 key
 APP_LABEL_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".app_labels.json")
+
+
+class ExclusiveThreadingHTTPServer(ThreadingHTTPServer):
+    """Windows 下独占监听端口，禁止 SO_REUSEADDR 造成多个看板静默双绑。"""
+
+    # POSIX 保留快速重启能力；Windows 使用 SO_EXCLUSIVEADDRUSE 保证唯一监听者。
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self):
+        if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(
+                socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
+def open_browser_when_ready(port, path="/", timeout=5.0, opener=None):
+    """后台等待本地 HTTP 服务实际响应后，再打开对应页面。"""
+    page_url = f"http://localhost:{port}{path}"
+    health_url = f"http://127.0.0.1:{port}/api/status"
+    opener = opener or webbrowser.open
+
+    def _wait_and_open():
+        deadline = time.monotonic() + max(0.1, float(timeout))
+        while time.monotonic() < deadline:
+            try:
+                with urllib.request.urlopen(health_url, timeout=0.25) as response:
+                    if response.status == 200:
+                        break
+            except (OSError, urllib.error.URLError):
+                time.sleep(0.05)
+        else:
+            print(f"[!] 看板服务就绪检查超时，仍尝试打开: {page_url}", flush=True)
+        try:
+            opener(page_url)
+        except Exception as exc:
+            print(f"[!] 无法自动打开浏览器: {exc}", flush=True)
+
+    thread = threading.Thread(
+        target=_wait_and_open, daemon=True, name="open-browser")
+    thread.start()
+    return thread
 # 包列表短期缓存（60s TTL）：避免每次打开下拉/刷新都全量 pm list packages
 APPS_CACHE_TTL = 60.0
 # label 解析失败后的重试间隔（秒）：失败也写缓存（fail 标记），
@@ -397,7 +442,7 @@ class WebServer:
     # ---------------- HTTP 服务 ----------------
     def start(self):
         handler = self._make_handler()
-        self._httpd = ThreadingHTTPServer(("127.0.0.1", self.port), handler)
+        self._httpd = ExclusiveThreadingHTTPServer(("127.0.0.1", self.port), handler)
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
         self._thread.start()
         return self._httpd.server_address[1]

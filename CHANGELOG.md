@@ -6,15 +6,29 @@
 
 ---
 
-## 当前状态（2026-09-20，v101）
+## 当前状态（2026-09-21，v102）
 
 | 项 | 值 |
 |---|---|
 | 前端资源版本 | **v81**（`web/index.html` 3 处、`web/report.html` 4 处 `?v=`） |
-| 测试 | Python **274** 条 + JS **181** 断言（全绿） |
+| 测试 | Python **281** 条 + JS **181** 断言（全绿） |
 | 分发方式 | **zip**（`make_zip.bat` / `tools/make_zip.py` → `share/perfcollect-cn-<版本>-<日期>.zip`）——**已无 exe / 安装包** |
 | 采集环境 | Windows + adb 真机（荣耀 ADT-AN00 Magic3 Pro / OPPO；详见 `devices.md`） |
 | 工具链 | `uv`（Python）+ `bun`（JS 测试）+ `adb` |
+
+---
+
+## v102（2026-09-21 · Codex）—— 离线看板端口独占与就绪后开页
+
+- **杜绝 Windows 静默双绑**：HTTP Server 在 Windows 使用 `SO_EXCLUSIVEADDRUSE`，实际
+  监听 socket 保证端口只有一个服务实例；POSIX 保留快速重启的地址复用行为。
+- **默认端口自动回退**：`dashboard.py` 未传 `--port` 时优先绑定 8080，占用则向上寻找
+  并打印实际端口；显式 `--port N` 冲突时输出中文 `[ERROR]` 并以退出码 2 结束，无 traceback。
+- **浏览器启动时序**：新增共享的服务就绪检查，`dashboard.py` 与 `main.py` 均在
+  `/api/status` 可响应后打开页面；离线入口支持 `--no-browser`，bat 不再提前打开固定 8080。
+- **退出收口**：离线入口在 `finally` 中调用 `web.stop()`，主动 shutdown、close 并等待线程退出。
+- **验证**：Windows 实测 8128 被占时默认策略绑定 8129，两端 `/api/runs` 均返回 200；
+  显式 8128 返回中文错误与退出码 2。Python **274 → 281**，JS **181**；前端资源保持 **v81**。
 
 ---
 

@@ -18,7 +18,6 @@ import signal
 import sys
 import threading
 import time
-import webbrowser
 from datetime import datetime
 
 from adb import Adb, AdbError
@@ -176,7 +175,7 @@ def main():
     wizard = bool(args.web and not args.auto)
 
     if args.web:
-        from web import WebServer
+        from web import WebServer, open_browser_when_ready
         web = WebServer(port=args.port, output_dir=outdir, adb=adb,
                         process_pattern=process_pattern)
         port = web.start()
@@ -212,15 +211,7 @@ def main():
         print("=" * 60)
         print("")
         if not args.no_browser:
-            # 延迟打开：等服务线程就绪（start() 已绑定端口，稍等更稳妥）
-            def _open_browser():
-                time.sleep(1.5)
-                try:
-                    webbrowser.open(f"http://localhost:{port}")
-                except Exception:
-                    pass
-            threading.Thread(target=_open_browser, daemon=True,
-                             name="open-browser").start()
+            open_browser_when_ready(port)
 
     chosen_pid, chosen_name = None, None
     if wizard:

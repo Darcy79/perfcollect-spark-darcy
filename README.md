@@ -45,7 +45,7 @@ cd collector && uv run --no-project python main.py --web
 | 文件 | 作用 |
 |---|---|
 | `start_perfcollect.bat` | **双击启动**采集 + Web 看板（自动定位目录、自动开浏览器） |
-| `start_dashboard.bat` | **双击查看历史报告**（无需手机，数据在本地 jsonl） |
+| `start_dashboard.bat` | **双击查看历史报告**（无需手机；服务就绪后自动开页；8080 占用时自动换端口） |
 
 > 首次运行 bat 会自动用 uv 下载 Python（1 分钟左右），之后即用即开。
 > bat 输出为英文（避免中文在 cmd 乱码），功能与命令启动完全一致。
@@ -147,6 +147,8 @@ python main.py --output ../test1  # 输出到其他目录
 python main.py --serial 设备序列号  # 多设备时指定
 python main.py --web              # 启动实时 Web 看板（浏览器查看）
 python main.py --web --port 9000  # 指定看板端口（默认 8080）
+python dashboard.py               # 只看历史报告；8080 占用时自动选择后续空闲端口
+python dashboard.py --port 9000 --no-browser  # 固定端口、无头启动
 ```
 
 ## Web 看板（实时曲线 + 历史报告）
@@ -170,6 +172,7 @@ python main.py --web
 - 历史交互：拉伸、缩短或整体平移全局拖动条时，Label 时间条同步显示当前数据窗口；Label、Pin 与图表绘图区使用同一类目坐标，缩放前后归属不漂移；Pin 暂时移出窗口只隐藏图内线条，顶部快照不增减内容，页面不会抖动；鼠标停在图表上也可直接滚轮翻页
 - 再按一次 Ctrl+C 彻底退出（关闭 Web 服务）
 - 手机不在也能看历史报告（数据来自本地 jsonl）
+- 离线历史看板会在服务真正可访问后再打开浏览器；默认 8080 被占用时自动改用后续空闲端口，显式 `--port` 冲突则直接报错
 
 ## 配置（config.json）
 

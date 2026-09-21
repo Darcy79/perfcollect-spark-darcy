@@ -318,6 +318,12 @@ class TestWebHttp(unittest.TestCase):
         finally:
             replacement.stop()
 
+    def test_second_server_cannot_silently_share_listening_port(self):
+        duplicate = WebServer(port=self.port, output_dir=self.tempdir.name)
+        with self.assertRaises(OSError):
+            duplicate.start()
+        duplicate.stop()
+
 
 if __name__ == "__main__":
     unittest.main()

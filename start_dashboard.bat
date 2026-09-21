@@ -13,12 +13,11 @@ if errorlevel 1 (
   exit /b 1
 )
 
-start "" http://localhost:8080/report.html
-
 echo.
 echo ==================================================
 echo  PerfCollect-CN  : dashboard only (no device needed)
-echo  History     : http://localhost:8080/report.html
+echo  History     : auto-open after service is ready
+echo  Port        : prefer 8080, auto fallback if occupied
 echo  Stop        : close window or Ctrl+C
 echo ==================================================
 echo.
