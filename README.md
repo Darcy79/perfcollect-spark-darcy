@@ -24,6 +24,8 @@ cd collector && uv run --no-project python main.py --web
 > 生成分发包：项目根目录双击 `make_zip.bat`（或 `python tools/make_zip.py`），输出在 `share/`。
 > 历史上 GitHub Actions 曾按 `perfdog.spec` 打包 exe 并发 Release，相关的 `packaging/`、`perfdog.spec`、
 > `.github/workflows/build.yml` 已全部移除；CI 现在只跑测试（`.github/workflows/tests.yml`）。
+> 该时期的 Release（`PerfDog-CN v1.0.0`，2026-08-21 发布）已清理，仅保留 tag `v1.0.0` 作为历史锚点，
+> 所以本仓库 Releases 页为空——这是**有意为之**，不是漏发。
 
 ## 5 分钟上手
 
