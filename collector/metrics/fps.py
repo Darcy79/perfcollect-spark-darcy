@@ -41,6 +41,7 @@
 
 import math
 import re
+import threading
 
 # 层不存在时，两次 --list 重试的最小间隔（秒）
 DEFAULT_RETRY_INTERVAL = 5.0
@@ -154,6 +155,9 @@ class FpsCollector:
         # 最近一次层探测的错误码（None=成功/未探测，"no_layer"/"probe_fail"），
         # 供 sample() 在无层时上报正确错误类型（2026-09-11 事故修复）
         self._last_probe_err = None
+        # PID 生命周期由主循环确认；只发信号，实际状态重置在 FPS worker 自己的
+        # sample() 开头执行，避免跨线程直接改 layer/基准造成竞态。
+        self._process_reset_requested = threading.Event()
 
     def resolve_layer(self):
         """旧签名兼容：只返回层名（可能 None）。错误码区分见 resolve_layer_ex()。"""
@@ -241,6 +245,23 @@ class FpsCollector:
         if self.layer_is_surfaceview:
             self._ever_surfaceview = True   # 记住：这是 SurfaceView 应用
         return layer
+
+    def notify_process_changed(self):
+        """目标进程退出/重启后请求下一次采样失效旧 Surface 图层。"""
+        self._process_reset_requested.set()
+
+    def _apply_process_reset(self):
+        if not self._process_reset_requested.is_set():
+            return
+        self._process_reset_requested.clear()
+        self._set_layer(None)
+        self._next_resolve = 0.0
+        self.mode = "sf"
+        self._ever_surfaceview = False
+        self._gfx_inited = False
+        self._gfx_last = None
+        self._gfx_zero_streak = 0
+        self._last_probe_err = None
 
     def _try_resolve(self, ts):
         """节流重匹配渲染层。返回是否真正执行了探测。
@@ -426,6 +447,7 @@ class FpsCollector:
         return FPS_CAP_FALLBACK_HZ
 
     def sample(self, ts):
+        self._apply_process_reset()
         # gfx 通道（普通 View 应用）优先走增量
         if self.mode == "gfx":
             return self._sample_gfx(ts)

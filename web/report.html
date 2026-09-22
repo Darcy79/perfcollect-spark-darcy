@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PerfCollect 自研工具 · 历史报告</title>
-<link rel="stylesheet" href="/assets/style.css?v=81">
+<link rel="stylesheet" href="/assets/style.css?v=83">
 </head>
 <body>
 <header>
@@ -47,7 +47,7 @@
           <b>悬停图表</b>：白色贯穿线跨图同步（tooltip 联动）<br>
           <b>点击图表</b>：锁定蓝色贯穿线（再点同点 / 双击解锁）<br>
           <b>图例(右上角)</b>：点击可切换该条曲线显示/隐藏，自选要看的指标<br>
-          <b>虚线标注</b>：蓝色=日志事件（场景/进入/退出）、红色=报错事件（logcat 采集）<br>
+          <b>虚线标注</b>：蓝色=日志/进程重启、橙色=进程退出、红色=崩溃/ANR/系统回收；完整堆栈保存在同目录 `.crash.log`<br>
           <b>↕ 拖动卡片</b>：调整图表顺序（自动记住）<br>
           <b>顶部时间条</b>：拖两端 ↔缩放 · 拖中间 =平移 · 点空白 =窗口跳转（全图联动）<br>
           <b>📄</b>：列表项图标可在新窗口打开可分享的自包含报告<br>
@@ -103,8 +103,8 @@
 <!-- v48（UI优化 3.4）：深色 toast 浮层（替代失败类 alert） -->
 <div class="pd-toast" id="pd-toast"></div>
 
-<script src="/assets/echarts.min.js?v=81"></script>
-<script src="/assets/app.js?v=81"></script>
-<script src="/assets/report.js?v=81"></script>
+<script src="/assets/echarts.min.js?v=83"></script>
+<script src="/assets/app.js?v=83"></script>
+<script src="/assets/report.js?v=83"></script>
 </body>
 </html>

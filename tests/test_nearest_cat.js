@@ -76,6 +76,8 @@ eq(APP_SOURCE.indexOf("dataset.labelKey") >= 0, true,
    'Label 增量渲染：使用稳定 ID 复用色块节点');
 eq(APP_SOURCE.indexOf("label-split-button") >= 0, true,
    'Label 交互隔离：存在独立分段按钮');
+eq(APP_SOURCE.indexOf("ev.kind === 'crash_log'") >= 0, true,
+   '崩溃堆栈只落日志，不在图表重复画线');
 eq(APP_SOURCE.indexOf("_zoomLabelTimeline") >= 0, true,
    'Label 缩放联动：时间轨注册全局拖动窗口');
 eq(APP_SOURCE.indexOf("stopImmediatePropagation") >= 0, true,

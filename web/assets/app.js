@@ -1904,20 +1904,30 @@
     events.forEach(function (ev) {
       if (markers.length >= MAX_EV) return;
       if (!ev || ev.t_ms == null) return;
+      // 完整 Java/Native 堆栈保留在 *.crash.log 与 events.jsonl 中；图表只画
+      // 崩溃主事件和进程状态沿，避免几十条栈帧变成一片红色竖线。
+      if (ev.kind === 'crash_log') return;
       var cat = nearestCat(times, ev.t_ms);
       if (cat === null) return;
-      var isErr = ev.level === 'E' || ev.level === 'F';
+      var isCrash = ev.kind === 'confirmed_crash' || ev.kind === 'anr' ||
+                    ev.kind === 'system_kill';
+      var isExit = ev.kind === 'process_exit';
+      var isRestart = ev.kind === 'process_restart';
+      var isErr = isCrash || ev.level === 'E' || ev.level === 'F';
+      var color = isErr ? 'rgba(239,83,80,0.75)' :
+                  (isExit ? 'rgba(255,183,77,0.75)' :
+                  (isRestart ? 'rgba(79,195,247,0.75)' : 'rgba(79,195,247,0.55)'));
       markers.push({
         xAxis: cat,
         lineStyle: {
-          color: isErr ? 'rgba(239,83,80,0.75)' : 'rgba(79,195,247,0.55)',
+          color: color,
           width: 1, type: 'dashed',
         },
         label: {
           show: true,
           formatter: String(ev.text || '').slice(0, 16),
           fontSize: 9,
-          color: isErr ? '#ef5350' : '#4fc3f7',
+          color: isErr ? '#ef5350' : (isExit ? '#ffb74d' : '#4fc3f7'),
           position: 'insideEndTop',
         },
       });

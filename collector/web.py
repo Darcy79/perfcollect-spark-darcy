@@ -220,12 +220,37 @@ class WebServer:
         with self._lock:
             self.status.update(kw)
 
+    def set_pending_target(self, package, process_pattern=""):
+        """更新尚未开始采集的目标，并让启动向导按新目标重新判定。
+
+        普通 APK（空 ``process_pattern``）启动时由 ``PidResolver`` 按包名解析
+        主进程，不需要经过微信 AppBrand 候选 PID 选择；带进程模式的目标仍走
+        原有候选探测，避免微信多实例时静默采错进程。
+        """
+        pattern = process_pattern or ""
+        with self._probe_lock:
+            self.process_pattern = pattern
+            self._probe_cache = (0.0, None)
+        self.set_status(target=package, process_pattern=pattern)
+
     # ---------------- 启动向导（2026-09-11）----------------
     # 设计：探测只读、不写任何采集数据；用户在看板上选定进程后 /api/start 记录请求，
     # main.py 轮询 take_start_request() 取走后**才开始创建 jsonl 并采样**——避免"先采
     # 了错进程再切"造成脏数据（2026-09-11 真机事故：采到 appbrand0 而非游戏的 appbrand1）。
     def probe_candidates(self, force=False):
-        """探测微信候选进程（只读）。TTL 8s 缓存；返回 probe.probe_once 的结果结构。"""
+        """返回启动方式；普通 APK 直启，进程模式目标执行只读候选探测。"""
+        with self._lock:
+            target = self.status.get("target")
+        with self._probe_lock:
+            pattern = self.process_pattern
+        if not pattern:
+            return {
+                "ok": True,
+                "direct": True,
+                "target": target,
+                "candidates": [],
+                "layer": {"name": None, "appbrand_index": None},
+            }
         now = time.time()
         with self._probe_lock:
             ts, cached = self._probe_cache
@@ -237,7 +262,7 @@ class WebServer:
         else:
             try:
                 from probe import probe_once
-                res = probe_once(self.adb, self.process_pattern)
+                res = probe_once(self.adb, pattern)
             except Exception as e:
                 res = {"ok": False, "error": f"探测失败: {e}", "candidates": [],
                        "layer": {"name": None, "appbrand_index": None}}
@@ -245,8 +270,19 @@ class WebServer:
             self._probe_cache = (time.time(), res)
         return res
 
-    def request_start(self, pid):
-        """校验 pid 在当前候选中 → 记录"开始采集"请求。返回 (ok, error)。"""
+    def request_start(self, pid=None):
+        """记录开始请求；普通 APK 自动解析主进程，进程模式目标校验候选 pid。"""
+        with self._lock:
+            target = self.status.get("target")
+        with self._probe_lock:
+            pattern = self.process_pattern
+        if not pattern:
+            if not target:
+                return False, "请先选择要采集的应用"
+            with self._lock:
+                self._start_req = {"pid": None, "name": target,
+                                   "ts": time.time()}
+            return True, None
         try:
             pid = int(pid)
         except (TypeError, ValueError):

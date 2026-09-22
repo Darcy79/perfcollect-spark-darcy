@@ -50,6 +50,24 @@ class TestJsonlEventSink(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             sink.write_many([{"text": "late"}])
 
+    def test_crash_and_lifecycle_events_create_readable_diagnostic_log(self):
+        diagnostic = os.path.join(self.tempdir.name, "capture.crash.log")
+        sink = JsonlEventSink(self.path, diagnostic)
+        sink.write_many([
+            {"t_ms": 1234, "kind": "confirmed_crash", "level": "E",
+             "tag": "AndroidRuntime", "pid": 88, "text": "FATAL EXCEPTION: main"},
+            {"t_ms": 1500, "kind": "process_exit", "level": "W",
+             "pid": 88, "text": "目标进程已退出"},
+            {"t_ms": 1600, "kind": "app_log", "text": "普通场景日志"},
+        ])
+        sink.close()
+        self.assertEqual(sink.diagnostic_count, 2)
+        with open(diagnostic, encoding="utf-8") as stream:
+            text = stream.read()
+        self.assertIn("FATAL EXCEPTION", text)
+        self.assertIn("process_exit", text)
+        self.assertNotIn("普通场景日志", text)
+
 
 class _FakeAdb:
     serial = "serial"

@@ -107,6 +107,34 @@ class TestWebHttp(unittest.TestCase):
         self.assertTrue(body["ok"])
         self.assertEqual(calls, [("com.example.game", ":render")])
 
+    def test_pending_apk_target_can_start_without_wechat_candidate_pid(self):
+        def switch(package, pattern):
+            self.server.set_pending_target(package, pattern)
+            return True, "selected"
+
+        self.server.set_switch_callback(switch)
+        query = urlencode({"package": "com.example.game", "process_pattern": ""})
+        switch_code, switched = self.request_json(
+            "POST", "/api/switch-target?" + query)
+        candidates_code, candidates = self.request_json("GET", "/api/candidates")
+        start_code, started = self.request_json("POST", "/api/start")
+        request = self.server.take_start_request()
+
+        self.assertEqual((switch_code, candidates_code, start_code), (200, 200, 200))
+        self.assertTrue(switched["ok"])
+        self.assertTrue(candidates["ok"])
+        self.assertTrue(candidates["direct"])
+        self.assertEqual(candidates["target"], "com.example.game")
+        self.assertTrue(started["ok"])
+        self.assertEqual(request["pid"], None)
+        self.assertEqual(request["name"], "com.example.game")
+
+        # 切回带进程模式的微信目标后，仍必须选择有效候选 pid，不能被直启逻辑放宽。
+        self.server.set_pending_target("com.tencent.mm", "appbrand")
+        _, wechat_start = self.request_json("POST", "/api/start")
+        self.assertFalse(wechat_start["ok"])
+        self.assertIsNone(self.server.take_start_request())
+
     def test_offline_target_device_apps_candidates_and_start(self):
         self.server.set_status(
             running=False, target="com.example.game", process_pattern=":render",

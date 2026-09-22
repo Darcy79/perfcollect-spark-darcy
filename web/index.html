@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PerfCollect 自研工具 · 实时看板</title>
-<link rel="stylesheet" href="/assets/style.css?v=81">
+<link rel="stylesheet" href="/assets/style.css?v=83">
 </head>
 <body>
 <header>
@@ -29,7 +29,7 @@
 <!-- v59 启动向导：用户确认目标进程后才开始记录（探测阶段不产生任何采集数据） -->
 <div id="wizard" class="wizard" style="display:none">
   <div class="wizard-head">
-    <h2>① 选择要采集的进程</h2>
+    <h2 id="wz-title">① 选择要采集的进程</h2>
     <span class="wizard-sub">确认「开始采集」之前不会记录任何数据</span>
   </div>
   <div id="wz-layer" class="wizard-layer"></div>
@@ -87,8 +87,8 @@
   <span>自研 PerfCollect · 数据仅存本地（output/*.jsonl）· <a href="/report.html">历史报告 →</a></span>
 </footer>
 
-<script src="/assets/echarts.min.js?v=81"></script>
-<script src="/assets/app.js?v=81"></script>
+<script src="/assets/echarts.min.js?v=83"></script>
+<script src="/assets/app.js?v=83"></script>
 <script>
 (function () {
   var charts = { fps: null, frametime: null, cpu: null, mem: null, net: null, temp: null };
@@ -250,6 +250,18 @@
       ? ('游戏渲染层: ' + layer.name + '（AppBrandUI' + layer.appbrand_index + '）')
       : '未识别到游戏渲染层（可手动选择候选进程）';
     while (list.firstChild) list.removeChild(list.firstChild);
+    if (wzData.direct) {
+      var target = wzData.target || (currentTarget && currentTarget.package) || '当前应用';
+      wzEl('wz-title').textContent = '① 确认要采集的应用';
+      wzEl('wz-layer').textContent = '普通 APK：' + target + '（开始后自动解析主进程）';
+      var ready = document.createElement('div');
+      ready.className = 'wz-msg';
+      ready.textContent = '已选择应用，无需再选择微信 AppBrand 进程。';
+      list.appendChild(ready);
+      wzEl('wz-start').disabled = false;
+      return;
+    }
+    wzEl('wz-title').textContent = '① 选择要采集的进程';
     if (!wzData.ok) {
       var err = document.createElement('div');
       err.className = 'wz-msg';
@@ -328,9 +340,11 @@
   }
 
   function startCapture() {
-    if (wzSel == null) return;
+    var direct = !!(wzData && wzData.direct);
+    if (!direct && wzSel == null) return;
     wzEl('wz-msg').textContent = '⏳ 正在开始采集…';
-    fetch('/api/start?pid=' + encodeURIComponent(wzSel), { method: 'POST' })
+    var startUrl = direct ? '/api/start' : '/api/start?pid=' + encodeURIComponent(wzSel);
+    fetch(startUrl, { method: 'POST' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (d && d.ok) {
@@ -638,6 +652,8 @@
           rows = [];
           Object.keys(charts).forEach(function (k) { if (charts[k]) charts[k].clear(); });
           updateSelectValue();
+          // 启动等待期立即按新目标刷新向导：普通 APK 可直接开始，微信仍需选进程。
+          if (wzEl('wizard').style.display !== 'none') loadCandidates(true);
         } else {
           st.textContent = '✘ ' + (d.error || '切换失败');
           st.className = 'tb-msg err';

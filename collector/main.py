@@ -37,6 +37,7 @@ from jsonl_writer import JsonlWriter
 from capture_session import CaptureSession
 from console_output import format_sample_status
 from event_sink import JsonlEventSink, stop_and_drain_event_capture
+from process_lifecycle import ProcessLifecycleTracker
 from runtime_health import (BACKOFF_MAX_S, FAIL_ALERT_STREAK,
                             ChannelAlertTracker, RuntimeHealthTracker,
                             backoff_sleep, row_has_any_value)
@@ -173,6 +174,7 @@ def main():
     # 新流程：探测（只读，**不创建任何采集输出**）→ 网页列出候选与推荐 → 用户选定
     # → 才创建 jsonl 并开始采样。命令行 --auto（或不带 --web）保持旧的自动解析行为。
     wizard = bool(args.web and not args.auto)
+    pending_target = {"package": package, "process_pattern": process_pattern}
 
     if args.web:
         from web import WebServer, open_browser_when_ready
@@ -195,6 +197,41 @@ def main():
         # 向导阶段即可停止/退出，不再等采集器初始化完成后才注册。
         web.set_stop_callback(_stop_capture)
         web.set_shutdown_callback(_shutdown_all)
+
+        if wizard:
+            def _select_pending_target(new_package, new_pattern=""):
+                """启动前只更新目标；真正的采集器在用户确认后再创建。"""
+                new_package = (new_package or "").strip()
+                new_pattern = new_pattern or ""
+                cfg["package"] = new_package
+                cfg["process_pattern"] = new_pattern
+                tmp_path = args.config + ".tmp"
+                try:
+                    with open(tmp_path, "w", encoding="utf-8") as stream:
+                        json.dump(cfg, stream, ensure_ascii=False, indent=2)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.replace(tmp_path, args.config)
+                except Exception as exc:
+                    try:
+                        if os.path.exists(tmp_path):
+                            os.remove(tmp_path)
+                    except Exception:
+                        pass
+                    print(f"[!] 目标持久化失败（不影响本次选择）: {exc}", flush=True)
+                pending_target["package"] = new_package
+                pending_target["process_pattern"] = new_pattern
+                web.set_pending_target(new_package, new_pattern)
+                if new_pattern:
+                    message = f"已选择 {new_package}，请确认候选进程后开始采集"
+                else:
+                    message = f"已选择 {new_package}，可直接开始采集"
+                print(f"[>] {message}", flush=True)
+                return True, message
+
+            # 采集开始前也必须允许下拉框改变目标；开始后会替换为 TargetSwitcher。
+            web.set_switch_callback(_select_pending_target)
+            web.set_pending_target(package, process_pattern)
         # 启动指引（exe 版没有 bat 的说明文字，关键信息必须在这里讲清楚）：
         # 看板地址 / 历史报告地址 / 数据目录绝对路径 / 如何开始与停止
         print("")
@@ -215,10 +252,11 @@ def main():
 
     chosen_pid, chosen_name = None, None
     if wizard:
-        from probe import probe_once
-        print("[*] 正在探测微信候选进程（只读，不记录任何采集数据）…", flush=True)
-        probe_info = probe_once(adb, process_pattern)
-        if probe_info.get("ok"):
+        print("[*] 正在确认采集目标（只读，不记录任何采集数据）…", flush=True)
+        probe_info = web.probe_candidates(force=True)
+        if probe_info.get("direct"):
+            print(f"[+] 已选择普通 App: {package}（开始后自动解析主进程）")
+        elif probe_info.get("ok"):
             layer = probe_info.get("layer") or {}
             print("[+] 候选进程（网页上可选择，★为推荐）：")
             for c in probe_info["candidates"]:
@@ -271,6 +309,10 @@ def main():
                                 break
                         print(f"[>] 回车确认 → 使用推荐 pid={chosen_pid} {chosen_name}", flush=True)
                         break
+                    if not pending_target["process_pattern"]:
+                        print(f"[>] 回车确认 → 采集 {pending_target['package']}（自动解析主进程）",
+                              flush=True)
+                        break
                     print("[!] 无推荐项可用，请在网页上选择（或输入 pid）", flush=True)
                 elif line.isdigit():
                     chosen_pid = int(line)
@@ -292,7 +334,7 @@ def main():
         if session.is_stopping:
             _cancel_before_capture()
             return
-        if not chosen_pid:
+        if not chosen_pid and pending_target["process_pattern"]:
             # 理论上 /api/start 会带 pid；这里兜底用推荐项，避免"开始了却没有目标"
             rec = (probe_info or {}).get("recommended_pid")
             if rec:
@@ -302,6 +344,11 @@ def main():
                         chosen_name = c["name"]
                         break
                 print(f"[!] 未指定进程，回退到推荐 pid={chosen_pid}")
+
+        # 用户可能在等待页将微信切换为普通 APK（或切回微信），后续所有采集器
+        # 必须使用确认时的最终目标，而不是进程启动时从 config 读到的旧值。
+        package = pending_target["package"]
+        process_pattern = pending_target["process_pattern"]
 
     if _cancel_before_capture():
         return
@@ -369,21 +416,31 @@ def main():
     print(f"[*] 开始采集（间隔 {args.interval}s，{'Ctrl+C 停止' if not args.duration else f'{args.duration}s'}）")
     print(f"[*] 数据目录: {run_dir}")
 
-    # 模式1：logcat 事件监听（零侵入捞小游戏 console.log，叠加看板标注层）
-    # 目标为微信小游戏时启用；原生 App 采集无需日志标注
+    # 通用 logcat 监听：所有目标都捕获与目标 PID/包名明确关联的 Java/Native
+    # 崩溃、ANR、系统回收证据；微信目标额外保留原有 console 场景事件。
     monitor = None
-    events_file = None
-    events_sink = None
-    if package.lower() == "com.tencent.mm":
-        try:
-            monitor = LogcatMonitor(adb, serial)
-            monitor.start()
-            events_file = os.path.join(run_dir, f"perfcollect_{run_id}.events.jsonl")
-            events_sink = JsonlEventSink(events_file)
-            print(f"[+] logcat 事件监听已启动（模式1：捞 console.log，tag/关键词过滤，限流 {monitor._min_gap}s）")
-        except Exception as e:
-            monitor = None
-            print(f"[!] logcat 监听启动失败（不影响性能采集）: {e}")
+    events_file = os.path.join(run_dir, f"perfcollect_{run_id}.events.jsonl")
+    diagnostic_file = os.path.join(run_dir, f"perfcollect_{run_id}.crash.log")
+    # sink 本身惰性建文件，并且独立于 logcat：即使设备拒绝拉取 logcat，
+    # 已确认的 PID 退出/重启状态沿仍能持久化，不能只留在控制台滚屏里。
+    events_sink = JsonlEventSink(events_file, diagnostic_file)
+    try:
+        initial_target = target_context.state()
+        monitor = LogcatMonitor(
+            adb, serial, target_package=initial_target.package,
+            target_pid=initial_target.pid,
+            target_process=initial_target.proc_name)
+        monitor.start()
+        print("[+] 崩溃日志监听已启动（目标关联：Java/Native/ANR/系统回收；"
+              "微信额外保留 console 事件）")
+    except Exception as e:
+        if monitor is not None:
+            try:
+                monitor.stop()
+            except Exception:
+                pass
+        monitor = None
+        print(f"[!] 崩溃日志监听启动失败（不影响性能采集）: {e}")
 
     def _stop_event_capture():
         """先停 logcat 生产者，再落盘尾部事件并关闭 sink。"""
@@ -472,6 +529,9 @@ def main():
     start = time.time()
     sample_aggregator = SampleAggregator(start)
     runtime_health = RuntimeHealthTracker(SAMPLER_INTERVALS)
+    initial_state = target_context.state()
+    process_lifecycle = ProcessLifecycleTracker(
+        initial_state.package, initial_state.pid)
     n = 0
     wrote_any = False   # 首点门槛：写出第一行有效数据前跳过全空行（任务⑤）
     try:
@@ -482,6 +542,20 @@ def main():
             # 指标窗口与目标标签来自同一原子快照，避免热切换时跨代错标。
             latest, pending, dropped, target_state = target_context.snapshot_mailbox(
                 metric_mailbox, SAMPLER_INTERVALS, drain_keys=("fps",))
+            if monitor:
+                monitor.update_target(
+                    target_state.package, target_state.pid, target_state.proc_name)
+            lifecycle_event = process_lifecycle.update(
+                target_state.package, target_state.pid,
+                max(0.0, (ts - start) * 1000.0))
+            if lifecycle_event:
+                fps_sampler, _ = target_context.capture_sampler("fps")
+                notify = getattr(fps_sampler, "notify_process_changed", None)
+                if notify:
+                    notify()
+                if events_sink:
+                    events_sink.write_many([lifecycle_event])
+                print(f"[!] {lifecycle_event['text']}", flush=True)
             row = sample_aggregator.build(
                 ts, target_state.package, latest, pending, dropped)
 
@@ -521,7 +595,19 @@ def main():
             # logcat 事件轮询落盘（与采样点同目录，供看板叠加标注层）
             if monitor and events_sink:
                 try:
-                    events_sink.write_many(monitor.get_events())
+                    log_events = monitor.get_events()
+                    events_sink.write_many(log_events)
+                    for event in log_events:
+                        alert_labels = {
+                            "confirmed_crash": "CRASH",
+                            "anr": "ANR",
+                            "system_kill": "SYSTEM-KILL",
+                        }
+                        label = alert_labels.get(event.get("kind"))
+                        if label:
+                            print(
+                                f"[{label}] {event.get('target')}: {event.get('text')}",
+                                flush=True)
                 except Exception as e:
                     print(f"[!] 事件落盘失败: {e}")
 
@@ -538,11 +624,13 @@ def main():
 
     print(f"[=] 采集结束，共 {n} 个采样点。已保存: {out_file}")
 
-    if monitor:
-        if events_sink and events_sink.count:
-            print(f"[+] logcat 事件已保存: {events_file}（{events_sink.count} 条）")
-        else:
-            print(f"[!] 本次未捕获到 logcat 事件（游戏内无 console.log 输出，或 tag 未命中过滤规则）")
+    if events_sink and events_sink.count:
+        print(f"[+] 目标事件已保存: {events_file}（{events_sink.count} 条）")
+    elif monitor:
+        print("[*] 本次未捕获到目标相关崩溃或日志事件")
+    if events_sink and events_sink.diagnostic_count:
+        print(f"[+] 崩溃/进程诊断日志已保存: {diagnostic_file}"
+              f"（{events_sink.diagnostic_count} 条）")
 
     # 自动生成 HTML 报告（自包含，双击即看），与 jsonl 同目录
     try:

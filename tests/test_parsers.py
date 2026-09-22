@@ -192,6 +192,24 @@ class TestFpsLayerSwitch(unittest.TestCase):
         self.assertEqual(r4["layer"], self.L1)
         self.assertEqual(r4["frame_p50_ms"], 16.67)
 
+    def test_confirmed_process_change_invalidates_old_layer_before_sampling(self):
+        adb = SfMockAdb(self.L1, sf_latency(1_000_000_000_000, 8, 16_666_666))
+        c = self._collector(adb)
+        c.sample(1.0)
+        self.assertEqual(c.layer, self.L1)
+
+        adb.layer = self.L2
+        adb.latency = sf_latency(2_000_000_000_000, 8, 16_666_666)
+        call_index = len(adb.calls)
+        c.notify_process_changed()
+        result = c.sample(2.0)
+
+        self.assertEqual(result["layer"], self.L2)
+        self.assertEqual(c.layer, self.L2)
+        later_calls = adb.calls[call_index:]
+        self.assertFalse(any(
+            "--latency" in call and call[-1] == self.L1 for call in later_calls))
+
 
 class TestFpsSparseSegment(unittest.TestCase):
     """OPPO 稀疏缓冲修复（2026-09-01）：按大 gap 切段取主段算 FPS。
