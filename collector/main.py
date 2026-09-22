@@ -11,7 +11,6 @@
 """
 
 import argparse
-import json
 import os
 import queue
 import signal
@@ -38,6 +37,7 @@ from capture_session import CaptureSession
 from console_output import format_sample_status
 from event_sink import JsonlEventSink, stop_and_drain_event_capture
 from process_lifecycle import ProcessLifecycleTracker
+from runtime_config import load_config, persist_runtime_target
 from runtime_health import (BACKOFF_MAX_S, FAIL_ALERT_STREAK,
                             ChannelAlertTracker, RuntimeHealthTracker,
                             backoff_sleep, row_has_any_value)
@@ -51,11 +51,6 @@ SAMPLER_INTERVALS = {
     "net": 1.0,
     "therm": 2.0,
 }
-
-
-def load_config(path):
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
 
 
 def resolve_capture_timing(cli_interval, cli_duration, config):
@@ -205,19 +200,10 @@ def main():
                 new_pattern = new_pattern or ""
                 cfg["package"] = new_package
                 cfg["process_pattern"] = new_pattern
-                tmp_path = args.config + ".tmp"
                 try:
-                    with open(tmp_path, "w", encoding="utf-8") as stream:
-                        json.dump(cfg, stream, ensure_ascii=False, indent=2)
-                        stream.flush()
-                        os.fsync(stream.fileno())
-                    os.replace(tmp_path, args.config)
+                    persist_runtime_target(
+                        args.config, new_package, new_pattern)
                 except Exception as exc:
-                    try:
-                        if os.path.exists(tmp_path):
-                            os.remove(tmp_path)
-                    except Exception:
-                        pass
                     print(f"[!] 目标持久化失败（不影响本次选择）: {exc}", flush=True)
                 pending_target["package"] = new_package
                 pending_target["process_pattern"] = new_pattern

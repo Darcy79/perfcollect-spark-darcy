@@ -97,7 +97,7 @@ def same_origin_ok(host_header, origin_header):
     """POST 端点同源校验（v61 安全加固，纯函数便于单测）。
 
     背景：看板只绑 127.0.0.1，但浏览器内任意网页都能用 no-cors 方式 POST
-    /api/stop、/api/shutdown、/api/switch-target（后者会写 config.json），
+    /api/stop、/api/shutdown、/api/switch-target（后者会写本机 config.local.json），
     一场 1 小时采集可被静默炸掉；DNS rebinding 还能让"看起来同源"的请求
     打到本机服务。防护策略（本地工具，不做认证）：
       - Host 头必须是回环地址（含 IPv6 [::1]），否则拒绝；

@@ -14,6 +14,7 @@ if _COLLECTOR not in sys.path:
 from sampling import MetricMailbox  # noqa: E402
 from target_context import TargetContext  # noqa: E402
 from target_switcher import TargetSwitcher  # noqa: E402
+from runtime_config import runtime_config_path  # noqa: E402
 
 
 class _Resolver:
@@ -75,7 +76,8 @@ class TestTargetSwitcher(unittest.TestCase):
         ok, message = self._switcher().apply(" new.pkg ", "appbrand2")
         self.assertTrue(ok)
         self.assertEqual(message, "目标已切换为 new.pkg")
-        with open(self.config_path, encoding="utf-8") as stream:
+        self.assertFalse(os.path.exists(self.config_path))
+        with open(runtime_config_path(self.config_path), encoding="utf-8") as stream:
             config = json.load(stream)
         self.assertEqual(config["package"], "new.pkg")
         self.assertEqual(config["process_pattern"], "appbrand2")
@@ -93,6 +95,7 @@ class TestTargetSwitcher(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(message, "包名为空")
         self.assertFalse(os.path.exists(self.config_path))
+        self.assertFalse(os.path.exists(runtime_config_path(self.config_path)))
         self.assertEqual(self.context.state().package, "old.pkg")
         self.assertEqual(self.writer.events, [])
 

@@ -49,7 +49,7 @@ EXCLUDE_DIRS = {
     "packaging", "staging", "installer_output", ".venv", "venv", ".idea",
 }
 EXCLUDE_FILES = {
-    ".app_labels.json", "AGENTS.md", "CHANGELOG.md", "架构设计.md",
+    ".app_labels.json", "config.local.json", "AGENTS.md", "CHANGELOG.md", "架构设计.md",
     "UI优化建议.md", "代码评估与优化项目.md", "打包后操作流程与改动需求.md",
     "验证统计卡片.html",
 }
@@ -59,6 +59,7 @@ EXCLUDE_PATTERNS = [
     re.compile(r".*\.pyc$"),
     re.compile(r".*\.pyo$"),
     re.compile(r".*\.log$"),
+    re.compile(r".*\.local\.json$"),
 ]
 
 

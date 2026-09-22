@@ -66,7 +66,7 @@ class LogcatMonitor:
         self._serial = serial or getattr(adb, "serial", "")
         self._tags = tuple(tags) if tags else DEFAULT_TAGS
         self._hits = tuple(text_hits) if text_hits else DEFAULT_TEXT_HITS
-        self._min_gap = min_interval    # 同 tag+text 限流间隔（秒）
+        self._min_gap = min_interval    # 微信 console 同 tag+text 限流间隔（秒）
         self._proc = None
         self._thread = None
         self._stop = False
@@ -74,7 +74,7 @@ class LogcatMonitor:
         self._lock = threading.Lock()
         self._anchor = None             # 采集启动时设备 epoch（秒）
         self._anchor_year = None        # 锚点对应年份（logcat 时间戳无年份，补锚点年）
-        self._last_emit = {}            # (tag, text) -> 最近发送时间，限流
+        self._last_emit = {}            # 微信 console (tag, text) -> 最近发送时间
         self._target_package = (target_package or "").strip()
         self._target_pid = target_pid
         self._target_process = (target_process or "").strip()
@@ -255,16 +255,18 @@ class LogcatMonitor:
         except Exception:
             pass
 
-        # 限流：同 tag+text 至少间隔 min_gap 秒，防 console.log 高频刷屏
-        now = time.time()
-        key = (tag, text[:80])
-        last = self._last_emit.get(key, 0)
-        if now - last < self._min_gap:
-            return None
-        self._last_emit[key] = now
-        # 限流字典定期裁剪：长采集大量唯一文本会缓慢膨胀（2026-08-21 修复）
-        if len(self._last_emit) > 500:
-            self._last_emit.clear()
+        # 只限流高频业务 console。崩溃、ANR、系统回收及其堆栈必须逐行保留，
+        # 否则相同异常在 1 秒内重复出现时会破坏诊断现场。
+        if kind == "app_log":
+            now = time.time()
+            key = (tag, text[:80])
+            last = self._last_emit.get(key, 0)
+            if now - last < self._min_gap:
+                return None
+            self._last_emit[key] = now
+            # 长采集大量唯一文本时定期裁剪，避免字典缓慢膨胀。
+            if len(self._last_emit) > 500:
+                self._last_emit.clear()
 
         event = {
             "t_ms": t_ms, "kind": kind, "target": target_package,

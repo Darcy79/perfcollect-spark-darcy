@@ -195,6 +195,10 @@ python main.py --web
 ```
 
 > `process_pattern` 决定采哪个进程：小游戏逻辑跑在微信的 `com.tencent.mm:appbrandN` 子进程，默认按 `appbrand` 匹配；找不到时回退微信主进程。
+>
+> `config.json` 只保存可公开的项目默认值。网页向导或热切换最近选择的应用会写入同目录
+> `config.local.json`，启动时自动覆盖默认目标；该本机文件已被 Git 与分发包排除，不会把常测
+> 应用的包名提交或分享给其他使用者。命令行 `--package/--process-pattern` 的优先级仍然最高。
 
 ## 测任意 App（通用扩展）
 

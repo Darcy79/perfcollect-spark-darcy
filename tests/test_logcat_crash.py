@@ -76,6 +76,18 @@ class TestLogcatCrashEvidence(unittest.TestCase):
         self.assertIsNone(other)
         self.assertEqual(selected["kind"], "anr")
 
+    def test_identical_diagnostic_lines_are_never_throttled(self):
+        first = self.parse(123, "E", "AndroidRuntime", "FATAL EXCEPTION: main")
+        second = self.parse(123, "E", "AndroidRuntime", "FATAL EXCEPTION: main")
+        self.assertEqual(first["kind"], "confirmed_crash")
+        self.assertEqual(second["kind"], "confirmed_crash")
+
+    def test_identical_wechat_console_lines_remain_throttled(self):
+        self.monitor.update_target("com.tencent.mm", 321)
+        line = "[INFO:CONSOLE(1)] repeated scene log"
+        self.assertIsNotNone(self.parse(321, "I", "chromium", line))
+        self.assertIsNone(self.parse(321, "I", "chromium", line))
+
 
 if __name__ == "__main__":
     unittest.main()

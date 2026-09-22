@@ -5,8 +5,6 @@
 从 main.py 的回调闭包中收口；温度采集器由 TargetContext 保留，不随应用切换。
 """
 
-import json
-import os
 import time
 
 from metrics.cpu import CpuCollector
@@ -14,6 +12,7 @@ from metrics.fps import FpsCollector
 from metrics.mem import MemCollector
 from metrics.network import NetworkCollector
 from pidresolver import PidResolver
+from runtime_config import persist_runtime_target
 
 
 def _target_collectors(adb, package, pattern, resolver):
@@ -45,22 +44,12 @@ class TargetSwitcher:
         self.log = log
 
     def _persist(self, package, pattern):
-        """原子更新配置，写入失败不阻塞本次内存态切换。"""
+        """原子更新本机目标选择，写入失败不阻塞本次内存态切换。"""
         self.config["package"] = package
         self.config["process_pattern"] = pattern
-        tmp_path = self.config_path + ".tmp"
         try:
-            with open(tmp_path, "w", encoding="utf-8") as stream:
-                json.dump(self.config, stream, ensure_ascii=False, indent=2)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(tmp_path, self.config_path)
+            persist_runtime_target(self.config_path, package, pattern)
         except Exception as exc:
-            try:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            except Exception:
-                pass
             self.log(f"[!] 目标持久化失败（不影响本次切换）: {exc}")
 
     def apply(self, new_package, new_pattern=""):
