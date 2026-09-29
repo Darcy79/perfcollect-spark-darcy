@@ -15,7 +15,8 @@ _COLLECTOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "col
 if _COLLECTOR not in sys.path:
     sys.path.insert(0, _COLLECTOR)
 
-from web import RING_SIZE, WebServer  # noqa: E402
+from web import RING_SIZE, WebServer, report_run_id  # noqa: E402
+from run_lock import CaptureRunLock  # noqa: E402
 
 
 class TestWebHttp(unittest.TestCase):
@@ -46,6 +47,21 @@ class TestWebHttp(unittest.TestCase):
         status, content_type, body = self.request(method, path, headers)
         self.assertIn("application/json", content_type)
         return status, json.loads(body.decode("utf-8"))
+
+    def make_timestamp_run(self, run_id, directory=None):
+        directory = directory or run_id
+        run_dir = os.path.join(self.tempdir.name, directory)
+        os.makedirs(run_dir)
+        filename = f"perfcollect_{run_id}.jsonl"
+        report = os.path.join(run_dir, filename)
+        with open(report, "w", encoding="utf-8") as stream:
+            stream.write('{"event":"meta"}\n{"t_ms":0}\n')
+        return directory + "/" + filename, report
+
+    def rename_run(self, name, label):
+        return self.request_json("POST", "/api/rename?" + urlencode({
+            "name": name, "newname": label,
+        }))
 
     def test_status_and_latest_round_trip(self):
         self.server.set_status(running=True, target="com.example.game", pid=123)
@@ -243,6 +259,124 @@ class TestWebHttp(unittest.TestCase):
                 "name": "run1/capture.jsonl", "newname": ""}))
         self.assertTrue(cleared["ok"])
         self.assertFalse(os.path.exists(jsonl_path + ".remark.txt"))
+
+    def test_directory_rename_keeps_files_and_report_sidecars_accessible(self):
+        run_id = "20260928_120000"
+        name, path = self.make_timestamp_run(run_id)
+        directory = os.path.dirname(path)
+        filenames = [
+            os.path.basename(path),
+            f"perfcollect_{run_id}.html",
+            f"perfcollect_{run_id}.csv",
+            f"perfcollect_{run_id}.events.jsonl",
+            f"perfcollect_{run_id}.crash.log",
+        ]
+        for filename in filenames[1:]:
+            with open(os.path.join(directory, filename), "w", encoding="utf-8") as stream:
+                stream.write('{"kind":"app_log","t_ms":0}\n'
+                             if filename.endswith(".events.jsonl") else "example")
+        code, result = self.rename_run(name, "登录页压测")
+        self.assertEqual(code, 200)
+        renamed = result["name"]
+        self.assertEqual(renamed, f"登录页压测_{run_id}/perfcollect_{run_id}.jsonl")
+        self.assertEqual(sorted(os.listdir(os.path.join(self.tempdir.name,
+                                                         f"登录页压测_{run_id}"))),
+                         sorted(filenames))
+        _, rows = self.request_json("GET", "/api/report?" + urlencode({"name": renamed}))
+        self.assertEqual(rows[1]["t_ms"], 0)
+        _, events = self.request_json("GET", "/api/events?" + urlencode({"name": renamed}))
+        self.assertEqual(events[0]["kind"], "app_log")
+        raw_code, _, _ = self.request(
+            "GET", "/api/raw?" + urlencode({"name": renamed.replace(".jsonl", ".html")}))
+        self.assertEqual(raw_code, 200)
+        _, created = self.request_json("POST", "/api/annotations?" + urlencode({
+            "name": renamed, "start_ms": 1, "end_ms": 10,
+            "text": "场景", "color": "#ff7043",
+        }))
+        self.assertTrue(created["ok"])
+        _, annotations = self.request_json(
+            "GET", "/api/annotations?" + urlencode({"name": renamed}))
+        self.assertEqual(annotations[0]["text"], "场景")
+
+    def test_clear_name_restores_directory_and_clears_legacy_sidecar(self):
+        run_id = "20260928_120001"
+        name, path = self.make_timestamp_run(run_id)
+        with open(path + ".remark.txt", "w", encoding="utf-8") as stream:
+            stream.write("旧备注")
+        _, renamed = self.rename_run(name, "新名称")
+        _, runs = self.request_json("GET", "/api/runs")
+        self.assertEqual(runs[0]["remark"], "新名称")
+        code, cleared = self.rename_run(renamed["name"], "")
+        self.assertEqual(code, 200)
+        self.assertEqual(cleared["name"], name)
+        self.assertTrue(os.path.isdir(os.path.join(self.tempdir.name, run_id)))
+        self.assertFalse(os.path.exists(path + ".remark.txt"))
+
+    def test_sort_uses_run_id_even_when_mtime_is_reversed_and_after_rename(self):
+        older, older_path = self.make_timestamp_run("20260928_100000")
+        newer, newer_path = self.make_timestamp_run("20260928_120000")
+        unknown_dir = os.path.join(self.tempdir.name, "legacy")
+        os.makedirs(unknown_dir)
+        with open(os.path.join(unknown_dir, "capture.jsonl"), "w") as stream:
+            stream.write('{"t_ms":0}\n')
+        os.utime(older_path, (2_000_000_000, 2_000_000_000))
+        os.utime(newer_path, (1_000_000_000, 1_000_000_000))
+        _, before = self.request_json("GET", "/api/runs")
+        self.assertEqual([item["name"] for item in before], [newer, older, "legacy/capture.jsonl"])
+        self.assertTrue(before[-1]["timestamp_unknown"])
+        _, renamed = self.rename_run(older, "大厅")
+        _, after = self.request_json("GET", "/api/runs")
+        self.assertEqual([item["name"] for item in after],
+                         [newer, renamed["name"], "legacy/capture.jsonl"])
+
+    def test_run_id_prefers_filename_then_falls_back_to_directory(self):
+        self.assertEqual(
+            report_run_id("场景_20260928_120000/perfcollect_20260928_110000.jsonl"),
+            "20260928_110000")
+        self.assertEqual(report_run_id("场景_20260928_120000/capture.jsonl"),
+                         "20260928_120000")
+        self.assertIsNone(report_run_id("legacy/capture.jsonl"))
+
+    def test_active_run_returns_409_even_when_web_status_is_false(self):
+        run_id = "20260928_120002"
+        name, path = self.make_timestamp_run(run_id)
+        active = CaptureRunLock(self.tempdir.name, run_id).acquire()
+        try:
+            self.server.set_status(running=False)
+            code, result = self.rename_run(name, "交易行")
+            self.assertEqual(code, 409)
+            self.assertIn("采集中", result["error"])
+            self.assertTrue(os.path.isfile(path))
+        finally:
+            active.release()
+
+    def test_invalid_names_and_collision_suffix(self):
+        run_id = "20260928_120003"
+        name, path = self.make_timestamp_run(run_id)
+        for invalid in ("CON", "NUL.txt", "bad.", "bad ", "   "):
+            code, _ = self.rename_run(name, invalid)
+            self.assertEqual(code, 400, invalid)
+        occupied = os.path.join(self.tempdir.name, f"大厅_{run_id}")
+        os.makedirs(occupied)
+        code, renamed = self.rename_run(name, "大/厅")
+        self.assertEqual(code, 200)
+        self.assertEqual(renamed["name"],
+                         f"大厅(2)_{run_id}/perfcollect_{run_id}.jsonl")
+        self.assertFalse(os.path.exists(path))
+
+    def test_failed_move_leaves_original_directory_and_remark(self):
+        from unittest.mock import patch
+        run_id = "20260928_120004"
+        name, path = self.make_timestamp_run(run_id)
+        with open(path + ".remark.txt", "w", encoding="utf-8") as stream:
+            stream.write("旧备注")
+        with patch("web.os.rename", side_effect=OSError("模拟权限错误")):
+            code, result = self.rename_run(name, "新名称")
+        self.assertEqual(code, 500)
+        self.assertIn("模拟权限错误", result["error"])
+        self.assertTrue(os.path.isfile(path))
+        with open(path + ".remark.txt", encoding="utf-8") as stream:
+            self.assertEqual(stream.read(), "旧备注")
 
     def test_annotation_create_load_delete_round_trip(self):
         run_dir = os.path.join(self.tempdir.name, "run-ann")

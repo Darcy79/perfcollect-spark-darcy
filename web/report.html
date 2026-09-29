@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PerfCollect 自研工具 · 历史报告</title>
-<link rel="stylesheet" href="/assets/style.css?v=83">
+<link rel="stylesheet" href="/assets/style.css?v=84">
 </head>
 <body>
 <header>
@@ -62,6 +62,15 @@
           <b>FPS 口径</b> = 上屏帧率（SurfaceFlinger，受屏幕刷新率封顶，60Hz 屏≤60）；引擎/开发者工具的「渲染循环帧率」是另一口径（可达 61~63），数值对不上属正常<br>
           <b>曲线断开</b>：该采样点取不到值（多为 adb 链路抖动，或游戏不在前台）——顶部「数据完整度」卡片给出缺数率、原因与缺数区间<br>
           帧时间 P50≈P95≈Max（如 16.7 / 16.8 / 17.2ms）在无卡顿窗口属正常——只统计新增帧
+          <hr style="border:0;border-top:1px solid #263545;margin:6px 0;">
+          <b>报告目录里有哪些文件</b>：未改名目录为采集时间戳；改名后为「名称_采集时间戳」。<br>
+          <b>*.jsonl</b>：原始采样、meta 和事件；每次采集均有，建议勿手改。<br>
+          <b>*.html</b>：收尾生成的自包含离线报告，可单独分享。<br>
+          <b>*.csv</b>：收尾生成的 Excel 兼容表格；使用 --no-csv 时不生成。<br>
+          <b>*.annotations.json</b>：使用「＋ 分段」后的 Label 区间、名称和颜色。<br>
+          <b>*.events.jsonl</b>：捕获到日志或进程事件时生成的事件流。<br>
+          <b>*.crash.log</b>：出现崩溃、ANR、系统回收或进程状态事件时的诊断原文。<br>
+          <b>*.jsonl.remark.txt</b>：历史报告备注兼容文件；新改名以目录名为准。
         </div>
       </div>
       <!-- v48（UI优化 3.1）：全局单时间条（控制所有图表缩放），原 6 图各挂一条已去除 -->
@@ -103,8 +112,8 @@
 <!-- v48（UI优化 3.4）：深色 toast 浮层（替代失败类 alert） -->
 <div class="pd-toast" id="pd-toast"></div>
 
-<script src="/assets/echarts.min.js?v=83"></script>
-<script src="/assets/app.js?v=83"></script>
-<script src="/assets/report.js?v=83"></script>
+<script src="/assets/echarts.min.js?v=84"></script>
+<script src="/assets/app.js?v=84"></script>
+<script src="/assets/report.js?v=84"></script>
 </body>
 </html>

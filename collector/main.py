@@ -37,6 +37,8 @@ from capture_session import CaptureSession
 from console_output import format_sample_status
 from event_sink import JsonlEventSink, stop_and_drain_event_capture
 from process_lifecycle import ProcessLifecycleTracker
+from run_lock import CaptureRunLock
+from report_outputs import finalize_capture_outputs
 from runtime_config import load_config, persist_runtime_target
 from runtime_health import (BACKOFF_MAX_S, FAIL_ALERT_STREAK,
                             ChannelAlertTracker, RuntimeHealthTracker,
@@ -100,6 +102,8 @@ def main():
     ap.add_argument("--port", type=int, default=8080, help="Web 看板端口（默认 8080）")
     ap.add_argument("--no-browser", action="store_true",
                     help="启动看板后不自动打开浏览器（无头/CI 场景用）")
+    ap.add_argument("--no-csv", action="store_true",
+                    help="采集结束后不自动生成 CSV（仍可手动导出）")
     ap.add_argument("--auto", action="store_true",
                     help="跳过启动向导：自动解析目标进程并立即开始采集（旧行为/脚本用）")
     args = ap.parse_args()
@@ -383,6 +387,7 @@ def main():
         return
 
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_lock = CaptureRunLock(outdir, run_id).acquire()
     # 每次采集新建一个按时间命名的文件夹，内含 jsonl 与 html 报告，避免历史数据混淆
     run_dir = os.path.join(outdir, run_id)
     os.makedirs(run_dir, exist_ok=True)
@@ -456,6 +461,7 @@ def main():
     if session.is_stopping:
         _stop_event_capture()
         jsonl_writer.close()
+        run_lock.release()
         if web:
             web.set_status(running=False)
             web.stop()
@@ -618,16 +624,11 @@ def main():
         print(f"[+] 崩溃/进程诊断日志已保存: {diagnostic_file}"
               f"（{events_sink.diagnostic_count} 条）")
 
-    # 自动生成 HTML 报告（自包含，双击即看），与 jsonl 同目录
+    # 收尾阶段导出，不占采样线程。CSV 先于 HTML，便于在 HTML 标注生成失败。
     try:
-        from export_report import load_rows, export_html
-        rows = load_rows(out_file)
-        if rows:
-            html_path = os.path.join(run_dir, f"perfcollect_{run_id}.html")
-            export_html(rows, html_path)
-            print(f"[+] 已生成 HTML 报告: {html_path}（双击打开即可查看）")
-    except Exception as e:
-        print(f"[!] HTML 报告生成失败（不影响数据）: {e}")
+        finalize_capture_outputs(out_file, generate_csv=not args.no_csv)
+    finally:
+        run_lock.release()
 
     if web:
         web.set_status(running=False)

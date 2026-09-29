@@ -43,7 +43,7 @@
   }
 
   function loadRuns() {
-    fetch('/api/runs').then(function (r) { return r.json(); }).then(function (runs) {
+    return fetch('/api/runs').then(function (r) { return r.json(); }).then(function (runs) {
       var next = runs || [];
       // 变化检测（v36）：按 name+points+size+mtime+remark 组签名，无变化直接跳过
       // 重建——保留滚动位置与选中态，历史列表真正"无感刷新"
@@ -175,15 +175,31 @@
     }
     function submit() {
       if (committing) return;
-      var newname = input.value.trim();
-      if (!newname || newname === renameDefault(name, current)) { cancel(); return; }
+      var newname = input.value;
+      if (newname === renameDefault(name, current) || (newname === '' && !current)) {
+        cancel();
+        return;
+      }
       committing = true;
       fetch('/api/rename?name=' + encodeURIComponent(name) +
             '&newname=' + encodeURIComponent(newname), { method: 'POST' })
-        .then(function (r) { return r.json(); })
-        .then(function (res) {
-          if (res && res.ok) { loadRuns(); return; }   // 成功后重建列表（标题/备注同步）
-          toast('重命名失败: ' + (res && res.error || '未知错误'), 'err');
+        .then(function (r) {
+          return r.json().then(function (body) { return {status: r.status, body: body}; });
+        })
+        .then(function (reply) {
+          var res = reply.body;
+          if (reply.status === 200 && res && res.ok) {
+            var renamed = res.name || name;
+            var wasSelected = selected === name;
+            compareSel = compareSel.map(function (item) { return item === name ? renamed : item; });
+            if (wasSelected) selected = renamed;
+            loadRuns().then(function () {
+              if (compareSel.length === 2) renderCompare();
+              if (wasSelected) selectRun(renamed);
+            });
+            return;
+          }
+          toast('重命名失败: ' + (res && res.error || 'HTTP ' + reply.status), 'err');
           cancel();
         })
         .catch(function () { toast('重命名失败', 'err'); cancel(); });
@@ -408,7 +424,7 @@
 
   // ============ v49（需求 C）：双报告对比（轻量版：两列 KPI + 差值着色） ============
   // 轻量版只做并排 KPI 对比 + Δ 方向着色，不做曲线同图叠加（完整版后续再说）。
-  // 排序约定：按 mtime 排序，较旧 = "上次"（左列），较新 = "本次"（右列），Δ = 本次 − 上次。
+  // 排序约定：按采集时间戳排序，较旧 = "上次"（左列），较新 = "本次"（右列）。
   function toggleCompare(name) {
     var idx = compareSel.indexOf(name);
     if (idx >= 0) {
@@ -466,11 +482,12 @@
     // 对比面板显示时收起占位提示（未选单报告时占位符会与面板重叠）
     setPlaceholder(PH_DEFAULT, false);
     var seq = ++compareSeq;
-    // 按 mtime 排序：较旧 = 上次（左），较新 = 本次（右）
+    // 按采集时间戳排序；旧报告无法解析时间时保留用户选择顺序。
     var sel = compareSel.slice().sort(function (a, b) {
       var ra = allRuns.filter(function (r) { return r.name === a; })[0];
       var rb = allRuns.filter(function (r) { return r.name === b; })[0];
-      return (ra && rb) ? (ra.mtime < rb.mtime ? -1 : 1) : 0;
+      return (ra && rb && ra.run_id && rb.run_id)
+        ? (ra.run_id < rb.run_id ? -1 : ra.run_id > rb.run_id ? 1 : 0) : 0;
     });
     var oldName = sel[0], newName = sel[1];
     panel.innerHTML = '<div class="cmp-loading">⏳ 正在加载对比数据…</div>';

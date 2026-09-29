@@ -20,6 +20,7 @@ import csv
 import json
 import os
 import sys
+import tempfile
 
 from data_health import scan_rows, health_summary
 from timeline_annotations import AnnotationStore
@@ -161,6 +162,20 @@ def export_csv(rows, out_path):
     return len(flat)
 
 
+def export_csv_atomic(rows, out_path):
+    """复用 CSV 列口径，在完整写出后才替换正式文件。"""
+    directory = os.path.dirname(os.path.abspath(out_path))
+    fd, temporary = tempfile.mkstemp(prefix=".perfcollect-csv-", suffix=".tmp", dir=directory)
+    os.close(fd)
+    try:
+        count = export_csv(rows, temporary)
+        os.replace(temporary, out_path)
+        return count
+    finally:
+        if os.path.exists(temporary):
+            os.remove(temporary)
+
+
 def export_xlsx(rows, out_path):
     try:
         from openpyxl import Workbook
@@ -180,7 +195,7 @@ def export_xlsx(rows, out_path):
     return len(flat)
 
 
-def export_html(rows, out_path, events=None, annotations=None):
+def export_html(rows, out_path, events=None, annotations=None, csv_failed=False):
     """自包含 HTML：内联 echarts + app.js + 样式 + 数据（+ 可选 logcat 事件标注）。"""
     def read(p):
         with open(p, encoding="utf-8") as f:
@@ -192,6 +207,11 @@ def export_html(rows, out_path, events=None, annotations=None):
     health_issues = scan_rows(rows)
     health_text = health_summary(health_issues)
     health_banner = ""
+    csv_banner = (
+        '<div class="health-banner" style="margin:10px 0;padding:8px 12px;'
+        'border:1px solid #ffab40;border-radius:6px;color:#ffab40;">'
+        '⚠ CSV 未生成；原始 JSONL 数据仍可使用。</div>'
+    ) if csv_failed else ""
     if health_issues:
         n_issues = len(health_issues)
         # 分级着色：high（疑似采错进程）红色，其余黄色
@@ -255,6 +275,7 @@ def export_html(rows, out_path, events=None, annotations=None):
   <div class="summary" id="report-summary"></div>
   <div class="completeness" id="report-completeness" style="display:none"></div>
   {health_banner}
+  {csv_banner}
   <section class="chart-card"><div class="chart-head"><h2>FPS / Jank</h2><div id="stat-fps" class="stat-line"></div></div><div id="chart-fps" class="chart"></div></section>
   <section class="chart-card"><div class="chart-head"><h2>帧时间 (ms)</h2><div id="stat-frametime" class="stat-line"></div></div><div id="chart-frametime" class="chart"></div></section>
   <section class="chart-card"><div class="chart-head"><h2>CPU 占用</h2><div id="stat-cpu" class="stat-line"></div></div><div id="chart-cpu" class="chart"></div></section>

@@ -26,6 +26,7 @@ import os
 import random
 import re
 import socket
+import tempfile
 import threading
 import time
 import urllib.error
@@ -38,11 +39,56 @@ from urllib.parse import urlparse, parse_qs
 
 from apk_label import get_apk_label
 from timeline_annotations import AnnotationStore
+from run_lock import is_run_active
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "web")
 RING_SIZE = 300  # 实时看板保留最近 300 个采样点
 # 已装应用 label 缓存（避免每次下拉都逐包 aapt 解析）：按设备序列号分 key
 APP_LABEL_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".app_labels.json")
+_REPORT_STAMP = re.compile(r"(?:^|_)(\d{8}_\d{6})\.jsonl$")
+_DIR_STAMP = re.compile(r"(?:^|_)(\d{8}_\d{6})$")
+_WINDOWS_RESERVED = re.compile(r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)", re.I)
+
+
+def report_run_id(relative_name):
+    """优先从 JSONL 文件名、再从所属目录解析可验证的采集时间戳。"""
+    filename = os.path.basename(relative_name)
+    match = _REPORT_STAMP.search(filename)
+    if not match:
+        for part in reversed(relative_name.replace("\\", "/").split("/")[:-1]):
+            match = _DIR_STAMP.search(part)
+            if match:
+                break
+    if not match:
+        return None
+    stamp = match.group(1)
+    try:
+        datetime.strptime(stamp, "%Y%m%d_%H%M%S")
+    except ValueError:
+        return None
+    return stamp
+
+
+def clean_run_label(raw):
+    """空字符串表示取消改名；纯空白及 Windows 非法目录名明确拒绝。"""
+    if raw == "":
+        return ""
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("名称不能只有空白")
+    # 沿用旧 API 的混合非法字符清洗口径：如“ 场景/A\nB ”变“场景AB”。
+    # 单纯的尾部空格/点则明确拒绝，避免 Windows 目录名被系统隐式折叠。
+    if re.search(r"[\\/:*?\"<>|\r\n]", raw):
+        raw = raw.strip()
+    else:
+        raw = raw.lstrip()
+    if raw.endswith((" ", ".")):
+        raise ValueError("名称不能以空格或点结尾")
+    label = re.sub(r"[\\/:*?\"<>|\x00-\x1f]", "", raw)[:100]
+    if not label.strip() or label.endswith((" ", ".")):
+        raise ValueError("名称无效")
+    if _WINDOWS_RESERVED.match(label):
+        raise ValueError("不能使用 Windows 保留名称")
+    return label
 
 
 class ExclusiveThreadingHTTPServer(ThreadingHTTPServer):
@@ -183,6 +229,7 @@ class WebServer:
         # _runs_lines 的读改写若交叉可能触发 "dictionary changed size during iteration"，
         # 该异常若不兜底会让 handler 线程崩溃 → 连接被重置 → 前端 Failed to fetch
         self._runs_lock = threading.Lock()
+        self._rename_lock = threading.Lock()
         # /api/report 解析缓存：OrderedDict{name: (mtime_ns, size, rows)}，历史 jsonl 不可变。
         # 用 LRU 淘汰（2026-08-25）：旧实现超上限整体 clear()，报告数 >50 时命中率断崖式
         # 归零（每次清空后所有报告都要重新全文解析）；改为只淘汰最久未使用的那条
@@ -659,8 +706,8 @@ class WebServer:
                 elif parsed.path == "/api/rename":
                     name = (qs.get("name") or [""])[0]
                     newname = (qs.get("newname") or [""])[0]
-                    ok, err = self._rename_run(name, newname)
-                    self._send(200, json.dumps({"ok": ok, "error": err}, ensure_ascii=False))
+                    status, result = self._rename_run(name, newname)
+                    self._send(status, json.dumps(result, ensure_ascii=False))
                 elif parsed.path == "/api/annotations":
                     name = (qs.get("name") or [""])[0]
                     action = (qs.get("action") or ["create"])[0]
@@ -861,31 +908,84 @@ class WebServer:
                     return False, f"切换失败: {e}"
 
             def _rename_run(self, name, newname):
-                """为记录写备注（sidecar .remark.txt）。返回 (ok, err)。"""
+                """有效时间戳报告移动目录；无时间戳的旧报告保留旁车改名。"""
                 if (not name or not name.endswith(".jsonl")
-                        or name.endswith(".events.jsonl")):
-                    return False, "bad name"
+                        or name.endswith(".events.jsonl") or len(name) > 1024):
+                    return 400, {"ok": False, "error": "报告名称无效"}
                 base = os.path.realpath(server.output_dir)
                 fp = os.path.realpath(os.path.join(base, name))
                 if not fp.startswith(base + os.sep):
-                    return False, "bad path"
+                    return 400, {"ok": False, "error": "报告路径无效"}
                 if not os.path.isfile(fp):
-                    return False, "no such file"
+                    return 400, {"ok": False, "error": "报告文件不存在"}
                 try:
-                    remark = newname.strip().replace("\r", "").replace("\n", "")
-                    remark = re.sub(r"[\\/:*?\"<>|]", "", remark)   # 去掉路径分隔等危险字符
-                    remark = remark[:100]
-                    rp = fp + ".remark.txt"
-                    if remark:
-                        with open(rp, "w", encoding="utf-8") as f:
-                            f.write(remark)
+                    remark = clean_run_label(newname)
+                except ValueError as exc:
+                    return 400, {"ok": False, "error": str(exc)}
+                run_id = report_run_id(name)
+                source_dir = os.path.dirname(fp)
+                if not run_id or source_dir == base:
+                    # 没有可恢复目录名的老文件（含 output 顶层散落文件）沿用旁车，
+                    # 不迁移历史目录。空备注仅在用户主动提交时删除该份旁车。
+                    try:
+                        sidecar = fp + ".remark.txt"
+                        if remark:
+                            fd, temporary = tempfile.mkstemp(
+                                prefix=".remark-", suffix=".tmp",
+                                dir=os.path.dirname(sidecar))
+                            try:
+                                with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                                    stream.write(remark)
+                                os.replace(temporary, sidecar)
+                            finally:
+                                if os.path.exists(temporary):
+                                    os.remove(temporary)
+                        elif os.path.isfile(sidecar):
+                            os.remove(sidecar)
+                        return 200, {"ok": True, "error": None, "name": name, "remark": remark}
+                    except OSError as exc:
+                        return 500, {"ok": False, "error": f"改名失败: {exc}"}
+
+                with server._rename_lock:
+                    if is_run_active(base, run_id):
+                        return 409, {"ok": False, "error": "采集中，请停止后再改名"}
+                    parent = os.path.realpath(os.path.dirname(source_dir))
+                    if not parent.startswith(base + os.sep) and parent != base:
+                        return 400, {"ok": False, "error": "报告目录路径无效"}
+                    target_name = (remark + "_" if remark else "") + run_id
+                    target_dir = os.path.join(parent, target_name)
+                    if os.path.normcase(target_dir) != os.path.normcase(source_dir):
+                        if os.path.lexists(target_dir):
+                            if not remark:
+                                return 409, {"ok": False, "error": "原始目录名已被占用"}
+                            number = 2
+                            while os.path.lexists(target_dir):
+                                target_name = f"{remark}({number})_{run_id}"
+                                target_dir = os.path.join(parent, target_name)
+                                number += 1
                     else:
-                        # 空备注 = 清除
-                        if os.path.isfile(rp):
-                            os.remove(rp)
-                    return True, None
-                except Exception as e:
-                    return False, str(e)
+                        target_dir = source_dir
+                    # 目录是唯一的事实来源。新报告不创建 remark.txt；旧旁车只在
+                    # 用户显式取消改名后清除，防止旧备注在原始目录名下重新显示。
+                    moved = target_dir != source_dir
+                    try:
+                        if moved:
+                            os.rename(source_dir, target_dir)
+                        if not remark:
+                            sidecar = os.path.join(target_dir, os.path.basename(fp) + ".remark.txt")
+                            if os.path.isfile(sidecar):
+                                os.remove(sidecar)
+                    except OSError as exc:
+                        if moved and os.path.isdir(target_dir) and not os.path.exists(source_dir):
+                            try:
+                                os.rename(target_dir, source_dir)
+                            except OSError:
+                                pass
+                        return 500, {"ok": False, "error": f"改名失败: {exc}"}
+                    renamed = os.path.relpath(
+                        os.path.join(target_dir, os.path.basename(fp)), base).replace("\\", "/")
+                    shown = target_name[:-(len(run_id) + 1)] if target_name != run_id else ""
+                    return 200, {"ok": True, "error": None, "name": renamed, "remark": shown}
 
             def _list_runs(self):
                 """递归扫描 output 下所有 jsonl（含按时间命名的子文件夹），最新在前。
@@ -959,6 +1059,8 @@ class WebServer:
                     has_meta = entry[3] if len(entry) > 3 else False
                     points = n - (1 if has_meta else 0)
                     fp = os.path.join(base, rel.replace("/", os.sep))
+                    run_id = report_run_id(rel)
+                    directory = os.path.basename(os.path.dirname(fp))
                     remark = ""
                     rp = fp + ".remark.txt"
                     if os.path.isfile(rp):
@@ -967,14 +1069,20 @@ class WebServer:
                                 remark = remark_file.read().strip()
                         except Exception:
                             pass
+                    if run_id and directory.endswith("_" + run_id):
+                        remark = directory[:-(len(run_id) + 1)]
                     out.append({
                         "name": rel,
                         "size_kb": round(size / 1024, 1),
                         "points": points,
-                        "mtime": datetime.fromtimestamp(mtime_ns / 1e9).strftime("%Y-%m-%d %H:%M:%S"),
+                        "mtime": (datetime.strptime(run_id, "%Y%m%d_%H%M%S")
+                                  .strftime("%Y-%m-%d %H:%M:%S")) if run_id else "时间未知",
+                        "run_id": run_id,
+                        "timestamp_unknown": run_id is None,
                         "remark": remark,
                     })
-                out.sort(key=lambda x: x["mtime"], reverse=True)
+                out.sort(key=lambda x: (x["run_id"] is not None, x["run_id"] or "", x["name"]),
+                         reverse=True)
                 return out
 
             def _load_events(self, name):

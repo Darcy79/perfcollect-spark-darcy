@@ -37,7 +37,7 @@ cd collector && uv run --no-project python main.py --web
 | 4. 看板 | 浏览器看实时曲线；顶部下拉可热切换被测应用 | FPS/CPU/内存曲线在动，状态栏"采集中" |
 | 4.1 场景打点 | 采集开始即进入 Label1；需要切换场景时点击一次 `＋ 分段` | 自动进入下一 Label 并换色；点击任意 Label 色块可改名 |
 | 5. 停止 | 看板点「⏹ 停止采集」或控制台 Ctrl+C 一次 | 提示已生成 HTML 报告 |
-| 6. 报告在哪 | 状态栏"数据:"一行有目录：`collector/output/<时间戳>/`（jsonl + 自包含 HTML）；历史报告页 `http://localhost:8080/report.html` 随时回看 | 双击 HTML 即看完整报告 |
+| 6. 报告在哪 | 状态栏"数据:"一行有目录：`collector/output/<时间戳>/`（JSONL + HTML + CSV）；历史报告页 `http://localhost:8080/report.html` 随时回看 | 双击 HTML 即看完整报告 |
 
 > 报告顶部若出现**告警横幅**（如"疑似采错进程"），先读 `指标说明.md`「十、数据健全性自检」按指引处理，再决定数据是否可用。
 > 换了一台新手机？按 `devices.md` 的「换机验收步骤」先跑 30 秒验证。
@@ -54,24 +54,28 @@ cd collector && uv run --no-project python main.py --web
 
 ## 输出结构（每次采集一个独立文件夹）
 
-**每次采集自动新建按时间命名的文件夹**，内含数据文件与报告，历史数据互不覆盖：
+**每次采集自动新建按采集时间命名的文件夹**；在历史看板改名后，目录变为
+`<名称>_<采集时间戳>`。目录内部文件名保持不变：
 
 ```
 collector/output/
 ├── 20260812_164653/                  ← 按时间命名的采集文件夹
 │   ├── perfcollect_20260812_164653.jsonl ← 原始数据（每行一个采样点）
+│   ├── perfcollect_20260812_164653.csv ← 自动生成的表格（--no-csv 可关闭）
 │   ├── perfcollect_20260812_164653.events.jsonl ← 可选：结构化日志/进程事件
 │   ├── perfcollect_20260812_164653.crash.log ← 可选：崩溃与进程诊断全文
 │   ├── perfcollect_20260812_164653.annotations.json ← 可选：彩色 Label 分段
 │   └── perfcollect_20260812_164653.html  ← 自包含 HTML 报告（双击即看，自动生成）
 ├── 20260812_170001/
 │   ├── perfcollect_20260812_170001.jsonl
+│   ├── perfcollect_20260812_170001.csv
 │   └── perfcollect_20260812_170001.html
 └── ...                                ← 每次采集都新增一个文件夹，不覆盖旧数据
 ```
 
 - **HTML 报告**：采集结束**自动生成**，ECharts 已内联，双击即看，可任意拷贝分享
-- **看板历史**：实时看板的历史报告页会自动列出所有文件夹里的报告（最新在前）
+- **CSV 表格**：采集结束默认自动生成，复用手工导出的列定义；`--no-csv` 关闭自动生成，仍可事后手工导出
+- **看板历史**：实时看板的历史报告页按采集时间戳排序；改名移动目录并保留内部文件名，采集中不可改名
 - **场景 Label**：独立保存在 `*.annotations.json`，不进入指标统计；每次点击自动结束上一段、开始下一颜色，实时、历史与自包含报告以独立紧凑时间条同步显示，不遮挡性能曲线；历史页时间条会随全局拖动窗口裁剪和重排
 - **崩溃诊断**：所有被测应用都会监听明确的 Java/Native 崩溃、ANR 与系统低内存回收证据；结构化事件写入 `*.events.jsonl`，出现诊断事件时另存易读的 `*.crash.log`。单纯进程消失只记为“原因待日志确认”，不会直接误判为闪退
 - 想找某次数据：按采集时间找到对应文件夹即可，不会丢
@@ -155,6 +159,7 @@ python main.py --output ../test1  # 输出到其他目录
 python main.py --serial 设备序列号  # 多设备时指定
 python main.py --web              # 启动实时 Web 看板（浏览器查看）
 python main.py --web --port 9000  # 指定看板端口（默认 8080）
+python main.py --no-csv          # 本次采集结束不自动生成 CSV
 python dashboard.py               # 只看历史报告；8080 占用时自动选择后续空闲端口
 python dashboard.py --port 9000 --no-browser  # 固定端口、无头启动
 ```
