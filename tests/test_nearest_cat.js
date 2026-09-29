@@ -579,9 +579,46 @@ if (typeof computeCompleteness !== 'function') {
   eq(areas[2][1].xAxis, 3, '区间标注：进行中 Label 自动延伸到最新采样点');
 }
 
-if (failures.length) {
-  console.error(`[x] 断言失败 ${failures.length} 条（通过 ${passed}）：`);
-  failures.forEach((f) => console.error('    - ' + f));
-  process.exit(1);
+// v85：报告操作只认看板伺服的 /api/raw；离线文件不猜端口/路径。
+const actionChecks = [];
+{
+  const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'assets',
+                                           'report_actions.js'), 'utf8');
+  new Function(source)();
+  const actions = window.PerfReportActions;
+  const loc = (protocol, hostname, pathname, search) =>
+    ({protocol, hostname, pathname, search});
+  eq(actions.reportNameFromLocation(
+    loc('http:', '127.0.0.1', '/api/raw', '?name=%E5%A4%A7%E5%8E%85%2Fperfcollect_1.html')),
+    '大厅/perfcollect_1.html', '在线报告取得准确相对路径');
+  eq(actions.reportNameFromLocation(
+    loc('file:', '', '/tmp/report.html', '')), null, '单独打开 HTML 不猜服务端路径');
+  eq(actions.reportNameFromLocation(
+    loc('http:', 'external.example', '/api/raw', '?name=report.html')), null,
+    '非本机网页不开放报告操作');
+  eq(actions.reportNameFromLocation(
+    loc('http:', 'localhost', '/report.html', '?name=report.html')), null,
+    '普通看板页不冒充自包含报告');
+  let notice = '', calls = 0;
+  actions.run('folder', null, (text) => { notice = text; },
+              () => { calls++; });
+  eq(notice.indexOf('需要在本工具看板中打开') >= 0, true,
+     '离线点击显示可读提示');
+  eq(calls, 0, '离线点击不请求未知服务器');
+  actionChecks.push(actions.run('folder', 'run/report.jsonl',
+                                (text) => { notice = text; },
+                                () => Promise.reject(new Error('服务已关闭')))
+    .then((ok) => {
+      eq(ok, false, '看板服务关闭时操作失败但不抛出');
+      eq(notice.indexOf('服务已关闭') >= 0, true, '服务不可达有可读提示');
+    }));
 }
-console.log(`[+] 全部断言通过（${passed} 条）`);
+
+Promise.all(actionChecks).then(() => {
+  if (failures.length) {
+    console.error(`[x] 断言失败 ${failures.length} 条（通过 ${passed}）：`);
+    failures.forEach((f) => console.error('    - ' + f));
+    process.exit(1);
+  }
+  console.log(`[+] 全部断言通过（${passed} 条）`);
+});

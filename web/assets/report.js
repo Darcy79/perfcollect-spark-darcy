@@ -227,12 +227,18 @@
     // fetch + 渲染全部完成后一次性显示新报告（无覆盖层、无叠加、无位置漂移）。
     // 连续快速切换时用 loadingSeq 丢弃慢响应，避免旧数据覆盖新报告。
     var seq = ++loadingSeq;
-    // v56（出入动效）：切报告前清掉时间条 .slider-show（状态归位）。report-body 随父
-    // 整体瞬隐（含 meta/汇总/图表，属既有"加载完再显示"切换态），时间条单独淡出会与
-    // 其余内容瞬隐不一致，故只做状态清理、不拖慢切换；新报告加载后时间条重新淡入。
+    // 切报告先隐藏旧内容；新报告的图表完成渲染后，主体与时间条一起渐入。
     var gsPrev = document.getElementById('global-slider-wrap');
     if (gsPrev) gsPrev.classList.remove('slider-show');
-    document.getElementById('report-body').style.display = 'none';
+    var bodyEl = document.getElementById('report-body');
+    bodyEl.classList.remove('report-reveal');
+    bodyEl.classList.add('report-entering');
+    bodyEl.style.display = 'none';
+    var labelEl = document.getElementById('report-label-timeline');
+    if (labelEl) {
+      labelEl.classList.remove('label-reveal');
+      labelEl.classList.add('label-pending');
+    }
     setPlaceholder(PH_LOADING, true);
     fetch('/api/report?name=' + encodeURIComponent(name)).then(function (r) { return r.json(); })
       .then(function (rows) {
@@ -248,7 +254,7 @@
           toast('读取失败或文件为空', 'err');   // v48（3.4）
           return;
         }
-        document.getElementById('report-body').style.display = 'block';
+        bodyEl.style.display = 'block';
         setPlaceholder(PH_DEFAULT, false);
         // v41：清洗 event 行（meta / target_switch，无 t_ms 无指标字段）并抽取核数，
         // 避免它们污染 x 轴类目与统计；核数供 CPU 图"进程占整机%"派生曲线使用。
@@ -300,7 +306,8 @@
         primary.appendChild(ptsSpan);
         var secondary = document.createElement('div');
         secondary.className = 'meta-secondary';
-        secondary.textContent = name;   // v49：只保留文件名，去掉"采样点/核数"
+        secondary.textContent = name + ' · 当前目录 ' +
+          (name.indexOf('/') >= 0 ? name.slice(0, name.lastIndexOf('/')) : 'output');
         metaEl.appendChild(primary);
         metaEl.appendChild(secondary);
         // v47：设备信息分行分字段显示（原为扎堆一行）。全部用 createElement +
@@ -325,6 +332,20 @@
           });
           metaEl.appendChild(box);
         }
+        var actions = document.createElement('div');
+        actions.className = 'report-detail-actions';
+        [['folder', '📂 打开所在文件夹'], ['zip', '⬇ 下载 ZIP']].forEach(function (item) {
+          var button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = item[1];
+          button.title = item[0] === 'folder' ? '在本机文件管理器中打开报告目录'
+                                               : '下载该报告的全部产物';
+          button.onclick = function () {
+            window.PerfReportActions.run(item[0], name, toast);
+          };
+          actions.appendChild(button);
+        });
+        metaEl.appendChild(actions);
         if (!charts.fps) {
           charts.fps = window.PerfCharts.makeChart('chart-fps', 'report');
           charts.frametime = window.PerfCharts.makeChart('chart-frametime', 'report');
@@ -361,7 +382,19 @@
         var labelTimeline = document.getElementById('report-label-timeline');
         if (labelTimeline) labelTimeline.style.setProperty('--slider-h', gsWrap.offsetHeight + 'px');
         void gsWrap.offsetWidth;   // 强制 reflow 保证过渡触发
-        requestAnimationFrame(function () { gsWrap.classList.add('slider-show'); });
+        requestAnimationFrame(function () {
+          if (seq === loadingSeq) gsWrap.classList.add('slider-show');
+        });
+        var labelRevealed = false;
+        function revealLabels() {
+          if (labelRevealed || seq !== loadingSeq) return;
+          labelRevealed = true;
+          requestAnimationFrame(function () {
+            if (seq !== loadingSeq || !labelEl) return;
+            labelEl.classList.remove('label-pending');
+            labelEl.classList.add('label-reveal');
+          });
+        }
         // 模式1：加载 logcat 事件标注层（场景/console 事件叠加到曲线）
         fetch('/api/events?name=' + encodeURIComponent(name)).then(function (r) { return r.json(); })
           .then(function (events) {
@@ -400,17 +433,27 @@
                     });
                 },
               });
+              revealLabels();
             }
             drawLabels(annotations);
-          }).catch(function () {});
+          }).catch(function () { revealLabels(); });
         // v48（UI优化 4.2）：URL hash 定位——刷新/分享链接后自动回到本报告
         try { history.replaceState(null, '', '#name=' + encodeURIComponent(name)); } catch (err) {}
         // v48（UI优化 3.3）：窄屏（≤900px 列表在上）选记录后把报告区滚入视口
         if (window.matchMedia && window.matchMedia('(max-width: 900px)').matches) {
           try { document.getElementById('report-body').scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (err) {}
         }
+        // 图表在可测量尺寸下已 setOption，下一帧只渐变整块透明度；
+        // loadingSeq 防止快速连点时旧报告的回调让新报告提前显现。
+        void bodyEl.offsetWidth;
+        requestAnimationFrame(function () {
+          if (seq !== loadingSeq) return;
+          bodyEl.classList.remove('report-entering');
+          bodyEl.classList.add('report-reveal');
+        });
       }).catch(function (e) {
         if (seq !== loadingSeq) return;
+        bodyEl.style.display = 'none';
         setPlaceholder(PH_DEFAULT, true);
         // 网络层失败（服务未启动/已关闭/连接被重置）：fetch 抛 TypeError，
         // 笼统显示 "Failed to fetch" 会让用户误以为数据损坏 → 明确引导重启看板

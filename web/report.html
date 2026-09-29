@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PerfCollect 自研工具 · 历史报告</title>
-<link rel="stylesheet" href="/assets/style.css?v=84">
+<title>perfcollect·历史看板</title>
+<link rel="stylesheet" href="/assets/style.css?v=89">
 </head>
 <body>
 <header>
@@ -51,6 +51,7 @@
           <b>↕ 拖动卡片</b>：调整图表顺序（自动记住）<br>
           <b>顶部时间条</b>：拖两端 ↔缩放 · 拖中间 =平移 · 点空白 =窗口跳转（全图联动）<br>
           <b>📄</b>：列表项图标可在新窗口打开可分享的自包含报告<br>
+          <b>📂 / ⬇</b>：报告信息区可在本机打开所在文件夹，或下载含该报告产物的 ZIP；单独拷走的离线 HTML 会提示先通过看板打开<br>
           <hr style="border:0;border-top:1px solid #263545;margin:6px 0;">
           <b>统计口径</b>：<br>
           帧时间 P95 = 各报告点的<b>0.5s 短窗 P95 峰值再求均值</b>（非全体帧 P95）<br>
@@ -112,8 +113,9 @@
 <!-- v48（UI优化 3.4）：深色 toast 浮层（替代失败类 alert） -->
 <div class="pd-toast" id="pd-toast"></div>
 
-<script src="/assets/echarts.min.js?v=84"></script>
-<script src="/assets/app.js?v=84"></script>
-<script src="/assets/report.js?v=84"></script>
+<script src="/assets/echarts.min.js?v=89"></script>
+<script src="/assets/app.js?v=89"></script>
+<script src="/assets/report_actions.js?v=89"></script>
+<script src="/assets/report.js?v=89"></script>
 </body>
 </html>

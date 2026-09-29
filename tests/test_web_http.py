@@ -2,6 +2,7 @@
 """WebServer 真实 HTTP/SSE 端到端回归（仅本机随机端口）。"""
 
 import http.client
+import io
 import json
 import os
 import sys
@@ -9,6 +10,8 @@ import tempfile
 import threading
 import time
 import unittest
+import zipfile
+from unittest.mock import patch
 from urllib.parse import urlencode
 
 _COLLECTOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "collector")
@@ -47,6 +50,125 @@ class TestWebHttp(unittest.TestCase):
         status, content_type, body = self.request(method, path, headers)
         self.assertIn("application/json", content_type)
         return status, json.loads(body.decode("utf-8"))
+
+    def request_full(self, method, path, headers=None):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request(method, path, headers=headers or {})
+        response = conn.getresponse()
+        result = response.status, dict(response.getheaders()), response.read()
+        conn.close()
+        return result
+
+    def test_open_folder_validates_origin_and_path(self):
+        name, path = self.make_timestamp_run("20260929_100000")
+        endpoint = "/api/open-folder?" + urlencode({"name": name})
+        with patch("web.open_report_folder") as opener:
+            code, result = self.request_json("POST", endpoint)
+            self.assertEqual(code, 200)
+            self.assertTrue(result["ok"])
+            opener.assert_called_once_with(os.path.realpath(os.path.dirname(path)))
+            code, _ = self.request_json("POST", endpoint, {
+                "Origin": "https://external.example",
+                "Host": f"127.0.0.1:{self.port}",
+            })
+            self.assertEqual(code, 403)
+            code, _ = self.request_json("POST", "/api/open-folder?name=../outside")
+            self.assertEqual(code, 400)
+            code, _ = self.request_json(
+                "POST", "/api/open-folder?name=" + name + ".missing")
+            self.assertEqual(code, 404)
+            self.assertEqual(opener.call_count, 1)
+        with patch("web.open_report_folder", side_effect=OSError("文件管理器不可用")):
+            code, result = self.request_json("POST", endpoint)
+            self.assertEqual(code, 500)
+            self.assertIn("文件管理器不可用", result["error"])
+
+    def test_report_zip_is_complete_isolated_and_read_only(self):
+        run_id = "20260929_100001"
+        name, path = self.make_timestamp_run(run_id, "登录页_" + run_id)
+        folder = os.path.dirname(path)
+        stem = f"perfcollect_{run_id}"
+        suffixes = (".html", ".csv", ".annotations.json", ".events.jsonl",
+                    ".crash.log", ".jsonl.remark.txt")
+        for suffix in suffixes:
+            with open(os.path.join(folder, stem + suffix), "wb") as stream:
+                stream.write(suffix.encode("utf-8"))
+        with open(os.path.join(folder, "perfcollect_20260929_100002.jsonl"), "wb") as stream:
+            stream.write(b"other run")
+        before = {entry: (os.stat(os.path.join(folder, entry)).st_mtime_ns,
+                          os.stat(os.path.join(folder, entry)).st_size)
+                  for entry in os.listdir(folder)}
+        code, headers, body = self.request_full(
+            "GET", "/api/zip?" + urlencode({"name": name}))
+        self.assertEqual(code, 200)
+        self.assertEqual(headers["Content-Type"], "application/zip")
+        self.assertIn("filename*=UTF-8''", headers["Content-Disposition"])
+        self.assertIn("%E7%99%BB", headers["Content-Disposition"])
+        with zipfile.ZipFile(io.BytesIO(body)) as archive:
+            expected = {"登录页_" + run_id + "/" + stem + suffix
+                        for suffix in (".jsonl",) + suffixes}
+            self.assertEqual(set(archive.namelist()), expected)
+            self.assertEqual(
+                archive.read("登录页_" + run_id + "/" + stem + ".jsonl").replace(b"\r\n", b"\n"),
+                b'{"event":"meta"}\n{"t_ms":0}\n')
+        after = {entry: (os.stat(os.path.join(folder, entry)).st_mtime_ns,
+                         os.stat(os.path.join(folder, entry)).st_size)
+                 for entry in os.listdir(folder)}
+        self.assertEqual(before, after)
+        invalid, _, _ = self.request("GET", "/api/zip?name=../outside.jsonl")
+        missing, _, _ = self.request("GET", "/api/zip?name=missing.jsonl")
+        self.assertEqual((invalid, missing), (400, 404))
+        with patch("web.zipfile.ZipFile", side_effect=OSError("压缩失败")):
+            failed, _, body = self.request(
+                "GET", "/api/zip?" + urlencode({"name": name}))
+        self.assertEqual(failed, 500)
+        self.assertIn("压缩失败", body.decode("utf-8"))
+
+    def test_open_old_report_tab_enhances_response_without_rewriting_file(self):
+        run_id = "20260918_143847"
+        name, jsonl_path = self.make_timestamp_run(run_id)
+        with open(jsonl_path, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps({
+                "event": "meta", "ts": 1789700000, "proc_name": "com.example.game",
+                "cores": 8, "device": {"market_name": "Magic3 Pro"},
+            }, ensure_ascii=False) + "\n")
+            stream.write('{"t_ms":0,"target":"com.example.game"}\n')
+            stream.write('{"t_ms":2000,"target":"com.example.game"}\n')
+        html_path = jsonl_path[:-len(".jsonl")] + ".html"
+        old_html = ("<html><head><title>旧报告</title></head><body>"
+                    "<header><h1>性能采集报告</h1></header>"
+                    "<main><div id='chart-fps'>原有图表</div></main>"
+                    '<script>var preview = "</body>"; window.chartReady = true;</script>'
+                    "</body></html>")
+        with open(html_path, "w", encoding="utf-8") as stream:
+            stream.write(old_html)
+        before = os.stat(html_path)
+        code, ctype, body = self.request(
+            "GET", "/api/raw?" + urlencode({"name": name.replace(".jsonl", ".html")}))
+        page = body.decode("utf-8")
+        self.assertEqual(code, 200)
+        self.assertIn("text/html", ctype)
+        self.assertIn("<title>perfcollect·" + run_id + "</title>", page)
+        for value in ("Magic3 Pro", "com.example.game", run_id, "2.0 秒",
+                      "打开所在文件夹", "下载 ZIP", "report_actions.js", "原有图表",
+                      '<script>var preview = "</body>"; window.chartReady = true;</script>'):
+            self.assertIn(value, page)
+        self.assertGreater(page.index("report_actions.js"), page.index("window.chartReady"))
+        self.assertIn("report_page_motion.css?v=89", page)
+        self.assertGreater(page.index("report_page_motion.js"), page.index("window.chartReady"))
+        self.assertEqual(page.count('id="open-report-folder"'), 1)
+        self.assertEqual((os.stat(html_path).st_mtime_ns, os.stat(html_path).st_size),
+                         (before.st_mtime_ns, before.st_size))
+        with open(html_path, encoding="utf-8") as stream:
+            self.assertEqual(stream.read(), old_html)
+        _, renamed = self.rename_run(name, "迁移后复测冒烟")
+        code, _, body = self.request(
+            "GET", "/api/raw?" + urlencode({
+                "name": renamed["name"].replace(".jsonl", ".html")}))
+        self.assertEqual(code, 200)
+        renamed_page = body.decode("utf-8")
+        self.assertIn("迁移后复测冒烟_" + run_id, renamed_page)
+        self.assertIn("<title>perfcollect·迁移后复测冒烟</title>", renamed_page)
 
     def make_timestamp_run(self, run_id, directory=None):
         directory = directory or run_id

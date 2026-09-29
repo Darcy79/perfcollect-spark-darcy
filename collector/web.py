@@ -12,12 +12,14 @@ web.add_sample(row)，页面通过轮询 /api/latest 实时刷新。
     GET /api/latest          最近采样点（环形缓冲，最多 300 点）
     GET /api/runs            output 目录历史 jsonl 列表（行数按 mtime/size 缓存）
     GET /api/report?name=xx  指定历史报告完整数据（JSON 数组，按 mtime 缓存）
+    GET /api/zip?name=xx     下载单份报告的同主干产物 ZIP
     GET /api/events?name=xx  logcat 事件标注列表
     GET /api/annotations?name=xx  性能区间备注列表
     POST /api/stop           停止采集（复用首次 Ctrl+C 的完整停止路径）
     POST /api/shutdown       彻底退出程序（停止采集 + 结束进程）
     POST /api/switch-target  热切换被测应用
     POST /api/rename         记录备注/重命名
+    POST /api/open-folder    在本机文件管理器打开报告目录
     POST /api/annotations    新增/删除性能区间备注
 """
 
@@ -25,21 +27,26 @@ import json
 import os
 import random
 import re
+import shutil
 import socket
+import subprocess
+import sys
 import tempfile
 import threading
 import time
 import urllib.error
 import urllib.request
 import webbrowser
+import zipfile
 from collections import OrderedDict
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 
 from apk_label import get_apk_label
 from timeline_annotations import AnnotationStore
 from run_lock import is_run_active
+from report_view import enhance_served_report
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "web")
 RING_SIZE = 300  # 实时看板保留最近 300 个采样点
@@ -48,6 +55,19 @@ APP_LABEL_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".app
 _REPORT_STAMP = re.compile(r"(?:^|_)(\d{8}_\d{6})\.jsonl$")
 _DIR_STAMP = re.compile(r"(?:^|_)(\d{8}_\d{6})$")
 _WINDOWS_RESERVED = re.compile(r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)", re.I)
+_REPORT_ARTIFACT_SUFFIXES = (
+    ".jsonl", ".html", ".csv", ".annotations.json",
+    ".events.jsonl", ".crash.log", ".jsonl.remark.txt",
+)
+
+
+def open_report_folder(folder):
+    """只将已校验的绝对目录路径交给系统文件管理器。"""
+    if os.name == "nt":
+        os.startfile(folder)
+    else:
+        command = "open" if sys.platform == "darwin" else "xdg-open"
+        subprocess.run([command, folder], check=True, timeout=10)
 
 
 def report_run_id(relative_name):
@@ -672,15 +692,20 @@ class WebServer:
                     qs = parse_qs(parsed.query)
                     name = (qs.get("name") or [""])[0]
                     self._send_raw(name)
+                elif path == "/api/zip":
+                    qs = parse_qs(parsed.query)
+                    name = (qs.get("name") or [""])[0]
+                    self._send_report_zip(name)
                 else:
                     self._send(404, json.dumps({"error": "not found"}))
 
             def do_POST(self):
-                """POST /api/rename 或 POST /api/switch-target
+                """看板本机 POST 操作入口。
 
                 /api/rename?name=xxx.jsonl&newname=场景备注
-                    备注写入 sidecar 文件 <jsonl路径>.remark.txt（不改动原始 jsonl）。
-                    newname 为空表示清除备注。
+                    时间戳报告修改目录名；旧格式仍使用备注旁车。空名称还原目录。
+                /api/open-folder?name=xxx.jsonl
+                    打开报告所在目录，不修改报告文件。
                 /api/switch-target?package=xx&process_pattern=yy
                     看板下拉切换被测应用：调用采集器 apply_target 热切换目标。
                 """
@@ -708,6 +733,9 @@ class WebServer:
                     newname = (qs.get("newname") or [""])[0]
                     status, result = self._rename_run(name, newname)
                     self._send(status, json.dumps(result, ensure_ascii=False))
+                elif parsed.path == "/api/open-folder":
+                    name = (qs.get("name") or [""])[0]
+                    self._open_report_folder(name)
                 elif parsed.path == "/api/annotations":
                     name = (qs.get("name") or [""])[0]
                     action = (qs.get("action") or ["create"])[0]
@@ -1110,6 +1138,95 @@ class WebServer:
                     return []
                 return events
 
+            def _report_path(self, name):
+                """将用户给定的相对路径限制在 output 内，不接受穿越或绝对路径。"""
+                if (not name or len(name) > 1024 or os.path.isabs(name)
+                        or any(part in ("", ".", "..") for part in
+                               name.replace("\\", "/").split("/"))
+                        or ":" in name):
+                    return 400, None
+                base = os.path.realpath(server.output_dir)
+                path = os.path.realpath(os.path.join(base, name))
+                if not path.startswith(base + os.sep):
+                    return 400, None
+                if not os.path.exists(path):
+                    return 404, None
+                return 200, path
+
+            def _open_report_folder(self, name):
+                code, path = self._report_path(name)
+                if code != 200:
+                    self._send(code, json.dumps(
+                        {"ok": False, "error": "报告路径无效" if code == 400 else "报告不存在"},
+                        ensure_ascii=False))
+                    return
+                folder = path if os.path.isdir(path) else os.path.dirname(path)
+                if not os.path.isdir(folder):
+                    self._send(404, json.dumps(
+                        {"ok": False, "error": "报告目录不存在"}, ensure_ascii=False))
+                    return
+                try:
+                    open_report_folder(folder)
+                except (OSError, subprocess.SubprocessError) as exc:
+                    self._send(500, json.dumps(
+                        {"ok": False, "error": f"无法打开报告目录: {exc}"}, ensure_ascii=False))
+                    return
+                self._send(200, '{"ok":true}')
+
+            def _send_report_zip(self, name):
+                if not name.endswith((".jsonl", ".html")) or name.endswith(".events.jsonl"):
+                    self._send(400, json.dumps({"error": "报告名称无效"}, ensure_ascii=False))
+                    return
+                code, path = self._report_path(name)
+                if code != 200:
+                    self._send(code, json.dumps(
+                        {"error": "报告路径无效" if code == 400 else "报告不存在"},
+                        ensure_ascii=False))
+                    return
+                folder = os.path.dirname(path)
+                stem = os.path.basename(path).rsplit(".", 1)[0]
+                primary = os.path.join(folder, stem + ".jsonl")
+                if not os.path.isfile(primary) or os.path.islink(primary):
+                    self._send(404, json.dumps({"error": "报告原始数据不存在"}, ensure_ascii=False))
+                    return
+                archive_dir = os.path.basename(folder)
+                headers_sent = False
+                try:
+                    # 在临时文件上完成打包后才发送响应头；zipfile.write 逐文件流式压缩。
+                    # 不持有报告缓存锁，ThreadingHTTPServer 的其他请求可并行服务。
+                    with tempfile.TemporaryFile(mode="w+b") as temporary:
+                        with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED,
+                                             allowZip64=True) as archive:
+                            for suffix in _REPORT_ARTIFACT_SUFFIXES:
+                                candidate = os.path.join(folder, stem + suffix)
+                                if (os.path.islink(candidate) or not os.path.isfile(candidate)
+                                        or os.path.realpath(candidate) != candidate):
+                                    continue
+                                archive.write(candidate, arcname=archive_dir + "/" +
+                                              os.path.basename(candidate))
+                        size = temporary.tell()
+                        temporary.seek(0)
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/zip")
+                        self.send_header("Content-Length", str(size))
+                        self.send_header("Content-Disposition",
+                                         "attachment; filename=\"report.zip\"; "
+                                         "filename*=UTF-8''" + quote(archive_dir + ".zip", safe=""))
+                        self.send_header("Cache-Control", "no-store")
+                        self.end_headers()
+                        headers_sent = True
+                        shutil.copyfileobj(temporary, self.wfile, length=256 * 1024)
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    return
+                except Exception as exc:
+                    # 生成失败发生在发送响应头之前时可返回明确错误。
+                    if not headers_sent:
+                        try:
+                            self._send(500, json.dumps(
+                                {"error": f"报告打包失败: {exc}"}, ensure_ascii=False))
+                        except OSError:
+                            pass
+
             def _send_raw(self, name):
                 """UI优化 4.1：伺服 output 下的自包含 HTML 报告（只读）。
 
@@ -1125,9 +1242,20 @@ class WebServer:
                 if not fp.startswith(base + os.sep):
                     self._send(400, json.dumps({"error": "bad path"}, ensure_ascii=False))
                     return
-                # 直接复用 _send_file：二进制读 + Content-Length + no-store；
-                # 文件不存在时自动 404（与 /assets 静态文件一致）
-                self._send_file(fp, "text/html; charset=utf-8")
+                # 旧 HTML 原文件不动，仅在看板响应中补信息与按钮；新版报告已自带
+                # 同样组件，增强器会原样返回，避免重复。解码失败则保留旧版原样行为。
+                try:
+                    with open(fp, encoding="utf-8") as stream:
+                        html_text = stream.read()
+                    html_text = enhance_served_report(
+                        html_text, os.path.splitext(fp)[0] + ".jsonl", fp)
+                except UnicodeError:
+                    self._send_file(fp, "text/html; charset=utf-8")
+                    return
+                except OSError:
+                    self._send(404, "not found", "text/plain; charset=utf-8")
+                    return
+                self._send(200, html_text, "text/html; charset=utf-8")
 
             def _load_report(self, name):
                 # 允许子目录路径，但做防穿越校验：规范化后必须仍在 output 目录内

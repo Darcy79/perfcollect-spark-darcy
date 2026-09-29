@@ -21,8 +21,11 @@ import json
 import os
 import sys
 import tempfile
+from datetime import datetime
+from html import escape
 
 from data_health import scan_rows, health_summary
+from report_view import report_display_name
 from timeline_annotations import AnnotationStore
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -176,6 +179,30 @@ def export_csv_atomic(rows, out_path):
             os.remove(temporary)
 
 
+def report_context(rows, out_path):
+    """只从已有 meta/采样点生成简短信息，不重复内联完整 JSONL。"""
+    meta = next((row for row in rows
+                 if isinstance(row, dict) and row.get("event") == "meta"), {})
+    device = meta.get("device") if isinstance(meta.get("device"), dict) else {}
+    samples = data_rows(rows)
+    times = [row.get("t_ms") for row in samples
+             if isinstance(row.get("t_ms"), (int, float))]
+    duration = f"{(max(times) - min(times)) / 1000:.1f} 秒" if times else "—"
+    model = device.get("market_name") or device.get("model") or "—"
+    process = meta.get("proc_name") or next(
+        (row.get("target") for row in samples if row.get("target")), "—")
+    return (
+        ("生成时目录", os.path.basename(os.path.dirname(os.path.abspath(out_path))) or "—"),
+        ("报告生成", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        ("机型", model),
+        ("系统", device.get("system_version") or "—"),
+        ("被测", process),
+        ("采样点", str(len(samples))),
+        ("时长", duration),
+        ("CPU", str(meta.get("cores")) if meta.get("cores") else "—"),
+    )
+
+
 def export_xlsx(rows, out_path):
     try:
         from openpyxl import Workbook
@@ -201,6 +228,10 @@ def export_html(rows, out_path, events=None, annotations=None, csv_failed=False)
         with open(p, encoding="utf-8") as f:
             return f.read()
 
+    context = report_context(rows, out_path)
+    context_html = "".join(
+        '<span class="report-context-item"><em>' + escape(label) + '：</em>' +
+        escape(str(value)) + '</span>' for label, value in context)
     cores = extract_cores(rows)      # 从 meta 行读核数（供 CPU 图"进程占整机%"）
     rows = data_rows(rows)           # 过滤 meta/target_switch 事件行
     # 数据健全性自检（2026-08-27）：扫描整份数据，异常注入报告顶部提示条
@@ -230,7 +261,10 @@ def export_html(rows, out_path, events=None, annotations=None, csv_failed=False)
         )
     echarts = read(os.path.join(ASSETS_DIR, "echarts.min.js"))
     appjs = read(os.path.join(ASSETS_DIR, "app.js"))
+    actionsjs = read(os.path.join(ASSETS_DIR, "report_actions.js"))
+    motionjs = read(os.path.join(ASSETS_DIR, "report_page_motion.js"))
     style = read(os.path.join(ASSETS_DIR, "style.css"))
+    motionstyle = read(os.path.join(ASSETS_DIR, "report_page_motion.css"))
     data = script_safe_json(rows, ensure_ascii=False)
     # 自动探测同目录事件文件 <name>.events.jsonl（logcat 标注层）
     if events is None:
@@ -262,13 +296,20 @@ def export_html(rows, out_path, events=None, annotations=None, csv_failed=False)
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PerfCollect 自研工具 · 报告</title>
+<title>perfcollect·{escape(report_display_name(out_path))}</title>
 <style>{style}</style>
+<style>{motionstyle}</style>
 </head>
 <body>
 <header>
   <h1>性能采集报告</h1>
   <div id="status-bar"><span id="report-meta">{os.path.basename(out_path)} · {len(rows)} 个采样点 · 本地生成</span></div>
+  <div class="report-context">{context_html}</div>
+  <div class="report-action-bar">
+    <button type="button" id="open-report-folder" title="在本机文件管理器中打开报告目录">📂 打开所在文件夹</button>
+    <button type="button" id="download-report-zip" title="下载该报告的全部产物">⬇ 下载 ZIP</button>
+    <span id="report-action-message" aria-live="polite"></span>
+  </div>
 </header>
 <main>
   <div id="report-label-timeline" class="label-timeline report-label-compact" style="display:none"></div>
@@ -286,6 +327,7 @@ def export_html(rows, out_path, events=None, annotations=None, csv_failed=False)
 <footer><span>自研 PerfCollect · 数据仅存本地，不传云端</span></footer>
 <script>{echarts}</script>
 <script>{appjs}</script>
+<script>{actionsjs}</script>
 <script>
 (function () {{
   var charts = {{ fps: null, frametime: null, cpu: null, mem: null, net: null, temp: null }};
@@ -315,6 +357,20 @@ def export_html(rows, out_path, events=None, annotations=None, csv_failed=False)
                                         {{alignChartId: 'chart-fps'}});
 }})();
 </script>
+<script>
+(function () {{
+  var name = window.PerfReportActions.reportNameFromLocation(window.location);
+  var message = document.getElementById('report-action-message');
+  function notify(text) {{ message.textContent = text; }}
+  document.getElementById('open-report-folder').addEventListener('click', function () {{
+    window.PerfReportActions.run('folder', name, notify);
+  }});
+  document.getElementById('download-report-zip').addEventListener('click', function () {{
+    window.PerfReportActions.run('zip', name, notify);
+  }});
+}})();
+</script>
+<script>{motionjs}</script>
 </body>
 </html>
 """

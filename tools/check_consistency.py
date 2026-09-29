@@ -124,7 +124,7 @@ def check():
     }
     expected_frontend = next(
         (value for value in frontend_versions.values() if value is not None), None)
-    expected_refs = {"web/index.html": 3, "web/report.html": 4}
+    expected_refs = {"web/index.html": 3, "web/report.html": 5}
     for page, expected_count in expected_refs.items():
         refs = re.findall(r"\?v=(\d+)", _read(page))
         frontend_versions[page] = "v" + refs[0] if refs else None
