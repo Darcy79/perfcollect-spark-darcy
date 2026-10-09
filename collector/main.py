@@ -23,15 +23,18 @@ from adb import Adb, AdbError
 from pidresolver import PidResolver
 from metrics.fps import FpsCollector
 from metrics.cpu import CpuCollector
+from cpu_probe import CpuProbeWorker, validate_probe_options
 from metrics.mem import MemCollector
 from metrics.network import NetworkCollector
 from metrics.thermal import ThermalCollector
 from logcat import LogcatMonitor
 from device_info import probe_device_info
 from sampling import MetricMailbox, SampleAggregator, SamplerScheduler
+from sampling_config import DEFAULT_INTERVALS, load_sampling_intervals, sampling_descriptor
 from target_context import TargetContext
 from target_monitor import TargetMismatchTracker
 from target_switcher import TargetSwitcher
+from sample_recording import SampleRecording, finish_sample_recording
 from jsonl_writer import JsonlWriter
 from capture_session import CaptureSession
 from console_output import format_sample_status
@@ -46,13 +49,7 @@ from runtime_health import (BACKOFF_MAX_S, FAIL_ALERT_STREAK,
 
 # 各指标独立采样间隔（秒）。FPS 高频（0.5s）让 Jank 及时出现；
 # 内存/温度低频（2s）避免 dumpsys 拖慢整体。并行后互不阻塞。
-SAMPLER_INTERVALS = {
-    "fps": 0.5,
-    "cpu": 1.0,
-    "mem": 2.0,
-    "net": 1.0,
-    "therm": 2.0,
-}
+SAMPLER_INTERVALS = dict(DEFAULT_INTERVALS)
 
 
 def resolve_capture_timing(cli_interval, cli_duration, config):
@@ -97,6 +94,9 @@ def main():
                     help="采集时长(秒)，覆盖 config.duration_s；0=手动停止")
     ap.add_argument("--interval", type=float, default=None,
                     help="采样间隔(秒)，覆盖 config.interval_ms")
+    ap.add_argument("--cpu-probe", default=None, help="实验性 CPU 探针 DEX 路径；不传则使用查询后端")
+    ap.add_argument("--probe-interval", type=float, default=0.25, help="设备探针采样周期（秒，默认0.25）")
+    ap.add_argument("--sampling-config", default=None, help="独立指标周期 JSON（秒），不改变报告汇总周期")
     ap.add_argument("--output", default="output", help="输出目录")
     ap.add_argument("--web", action="store_true", help="启动实时 Web 看板")
     ap.add_argument("--port", type=int, default=8080, help="Web 看板端口（默认 8080）")
@@ -111,7 +111,16 @@ def main():
     cfg = load_config(args.config)
     try:
         args.interval, args.duration = resolve_capture_timing(args.interval, args.duration, cfg)
-    except ValueError as e:
+        sampler_intervals = load_sampling_intervals(args.sampling_config)
+        validate_probe_options(args.cpu_probe, args.probe_interval)
+        sampling_info = sampling_descriptor(sampler_intervals, args.interval)
+        if args.cpu_probe:
+            sampling_info["backend"] = "per_metric"
+            sampling_info["streaming"] = True
+            sampling_info["cpu_probe"] = {"requested": True, "interval_s": args.probe_interval,
+                                           "fallback_interval_s": sampler_intervals["cpu"],
+                                           "experimental": True}
+    except (ValueError, OSError) as e:
         ap.error(str(e))
     package = args.package if args.package is not None else cfg.get("package", "com.tencent.mm")
     process_pattern = args.process_pattern if args.process_pattern is not None \
@@ -398,12 +407,24 @@ def main():
         "ts": round(time.time(), 3),
         "event": "meta",
         "schema_version": 3,
+        "sampling": sampling_info,
+        "sample_recording": {"schema_version": 1, "suffix": ".samples.jsonl"},
         "fps_window_mode": "preserved",
         "metric_freshness_mode": "sampled_at",
         "cores": cores,
         "proc_name": target_context.state().proc_name or package,
         "device": device_info,
     }, flush=True)
+    samples_file = out_file[:-len(".jsonl")] + ".samples.jsonl"
+    try:
+        sample_recording = SampleRecording(samples_file, sampling_info=sampling_info).start()
+    except Exception:
+        jsonl_writer.close()
+        run_lock.release()
+        raise
+    target_context.set_record_sink(sample_recording.record)
+    if sampling_info["experimental_cpu_cadence"]:
+        print("[!] 使用自定义 CPU 查询周期；实际周期与开销需真机验证，不代表精度保证。")
     print(f"[*] 开始采集（间隔 {args.interval}s，{'Ctrl+C 停止' if not args.duration else f'{args.duration}s'}）")
     print(f"[*] 数据目录: {run_dir}")
 
@@ -443,7 +464,7 @@ def main():
     # 实时 Web 看板：服务启动与"打开浏览器"已在启动向导阶段提前完成，
     # 这里只在**用户确认、采集真正开始后**更新状态——向导模式下此前不产生任何输出文件。
     if web:
-        web.set_status(running=True, device=adb.serial, pid=pid, run_id=run_id,
+        web.set_status(sampling=sampling_info, running=True, device=adb.serial, pid=pid, run_id=run_id,
                        report_name=(run_id + "/perfcollect_" + run_id + ".jsonl"),
                        target=package, process_pattern=process_pattern,
                        cores=cores, device_info=device_info,
@@ -459,8 +480,11 @@ def main():
         web.set_switch_callback(target_switcher.apply)
 
     if session.is_stopping:
-        _stop_event_capture()
-        jsonl_writer.close()
+        try:
+            finish_sample_recording(session, target_context, sample_recording)
+        finally:
+            _stop_event_capture()
+            jsonl_writer.close()
         run_lock.release()
         if web:
             web.set_status(running=False)
@@ -472,9 +496,17 @@ def main():
     # 每个指标独立线程按各自间隔采样；mailbox 同时保存 latest，并为 FPS 保留
     # 主循环两次落盘之间的完整 0.5s 窗口。慢指标（mem/therm）仍只保留最新值。
 
+    scheduled_intervals = {key: value for key, value in sampler_intervals.items()
+                           if not (args.cpu_probe and key == "cpu")}
     sampler_scheduler = SamplerScheduler(
-        session, target_context, metric_mailbox, SAMPLER_INTERVALS)
+        session, target_context, metric_mailbox, scheduled_intervals)
     sampler_scheduler.start()
+    cpu_backend = None
+    if args.cpu_probe and not session.is_stopping:
+        cpu_backend = CpuProbeWorker(session, target_context, metric_mailbox, adb,
+                                     args.cpu_probe, args.probe_interval,
+                                     sampler_intervals["cpu"], jsonl_writer)
+        cpu_backend.start()
 
     # 目标一致性自检（2026-09-11）：层里的 AppBrandUI(n) 应与正在采集的 appbrand(n)
     # 一致；不一致说明微信把渲染切到了别的实例（cpu/mem/net 采错进程）。
@@ -520,7 +552,7 @@ def main():
 
     start = time.time()
     sample_aggregator = SampleAggregator(start)
-    runtime_health = RuntimeHealthTracker(SAMPLER_INTERVALS)
+    runtime_health = RuntimeHealthTracker(sampler_intervals)
     initial_state = target_context.state()
     process_lifecycle = ProcessLifecycleTracker(
         initial_state.package, initial_state.pid)
@@ -528,12 +560,16 @@ def main():
     wrote_any = False   # 首点门槛：写出第一行有效数据前跳过全空行（任务⑤）
     try:
         while not session.is_stopping:
+            sample_recording.check()
+            if web:
+                web.set_status(sampling_runtime=sampler_scheduler.snapshot(),
+                               cpu_backend=cpu_backend.snapshot() if cpu_backend else None)
             ts = time.time()
             if args.duration and (ts - start) >= args.duration:
                 break
             # 指标窗口与目标标签来自同一原子快照，避免热切换时跨代错标。
             latest, pending, dropped, target_state = target_context.snapshot_mailbox(
-                metric_mailbox, SAMPLER_INTERVALS, drain_keys=("fps",))
+                metric_mailbox, sampler_intervals, drain_keys=("fps",))
             if monitor:
                 monitor.update_target(
                     target_state.package, target_state.pid, target_state.proc_name)
@@ -609,10 +645,25 @@ def main():
             session.wait(backoff_sleep(args.interval, health["fail_streak"]))
     finally:
         # duration 到期时也统一停止生产者；阻塞中的 adb 调用只有限等待，不强杀线程。
-        session.request_stop()
-        session.join_workers(timeout=1.0)
-        _stop_event_capture()
-        jsonl_writer.close()
+        try:
+            finish_sample_recording(session, target_context, sample_recording,
+                                    scheduler=sampler_scheduler, cpu_backend=cpu_backend)
+        finally:
+            if web:
+                web.set_status(running=False, sampling_runtime=sampler_scheduler.snapshot(),
+                               cpu_backend=cpu_backend.snapshot() if cpu_backend else None)
+            try:
+                _stop_event_capture()
+            finally:
+                jsonl_writer.close()
+
+    try:
+        sampler_scheduler.raise_if_failed()
+        if cpu_backend:
+            cpu_backend.raise_if_failed()
+    except RuntimeError:
+        run_lock.release()
+        raise
 
     print(f"[=] 采集结束，共 {n} 个采样点。已保存: {out_file}")
 

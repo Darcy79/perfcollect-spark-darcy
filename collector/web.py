@@ -47,6 +47,7 @@ from apk_label import get_apk_label
 from timeline_annotations import AnnotationStore
 from run_lock import is_run_active
 from report_view import enhance_served_report
+from sample_diagnostics import load_diagnostics
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "web")
 RING_SIZE = 300  # 实时看板保留最近 300 个采样点
@@ -57,7 +58,7 @@ _DIR_STAMP = re.compile(r"(?:^|_)(\d{8}_\d{6})$")
 _WINDOWS_RESERVED = re.compile(r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)", re.I)
 _REPORT_ARTIFACT_SUFFIXES = (
     ".jsonl", ".html", ".csv", ".annotations.json",
-    ".events.jsonl", ".crash.log", ".jsonl.remark.txt",
+    ".events.jsonl", ".samples.jsonl", ".crash.log", ".jsonl.remark.txt",
 )
 
 
@@ -677,6 +678,10 @@ class WebServer:
                     qs = parse_qs(parsed.query)
                     name = (qs.get("name") or [""])[0]
                     self._send_json_api(lambda: self._load_report(name))
+                elif path == "/api/sample-detail":
+                    qs = parse_qs(parsed.query)
+                    name = (qs.get("name") or [""])[0]
+                    self._send_json_api(lambda: self._load_sample_detail(name))
                 elif path == "/api/events":
                     # logcat 事件标注（模式1：与报告同目录的 perfcollect_xxx.events.jsonl）
                     qs = parse_qs(parsed.query)
@@ -819,6 +824,7 @@ class WebServer:
                 self.send_header("Connection", "keep-alive")
                 self.send_header("X-Accel-Buffering", "no")
                 self.end_headers()
+                batch_mode = "batch=1" in self.path.split("?", 1)[-1].split("&")
                 last_seq = -1
                 try:
                     while True:
@@ -829,18 +835,25 @@ class WebServer:
                         new = [r for r in latest if r.get("_seq", 0) > last_seq]
                         if new:
                             max_seq = last_seq
-                            for row in new:
-                                payload = json.dumps(row, ensure_ascii=False)
+                            if batch_mode:
+                                payload = json.dumps({"rows": new}, ensure_ascii=False)
                                 self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
-                                if row.get("_seq", 0) > max_seq:
-                                    max_seq = row.get("_seq", 0)
+                                max_seq = max(row.get("_seq", 0) for row in new)
+                            else:
+                                for row in new:
+                                    payload = json.dumps(row, ensure_ascii=False)
+                                    self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
+                                    if row.get("_seq", 0) > max_seq:
+                                        max_seq = row.get("_seq", 0)
                             last_seq = max_seq
                         else:
                             self.wfile.write(b": keepalive\n\n")
                         self.wfile.flush()
-                        time.sleep(0.2)
+                        time.sleep(0.5 if batch_mode else 0.2)
                 except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                     pass  # 客户端断开，正常结束
+                finally:
+                    self.close_connection = True
 
             # ---------------- 内部 ----------------
             def _scan_device_apps(self, serial):
@@ -938,7 +951,7 @@ class WebServer:
             def _rename_run(self, name, newname):
                 """有效时间戳报告移动目录；无时间戳的旧报告保留旁车改名。"""
                 if (not name or not name.endswith(".jsonl")
-                        or name.endswith(".events.jsonl") or len(name) > 1024):
+                        or name.endswith((".events.jsonl", ".samples.jsonl")) or len(name) > 1024):
                     return 400, {"ok": False, "error": "报告名称无效"}
                 base = os.path.realpath(server.output_dir)
                 fp = os.path.realpath(os.path.join(base, name))
@@ -1031,7 +1044,7 @@ class WebServer:
                             # *.events.jsonl 是 logcat 事件旁车文件，不是独立
                             # 性能报告；列出它会让用户看到伪造的“2 个采样点”记录。
                             if (not fn.endswith(".jsonl")
-                                    or fn.endswith(".events.jsonl")):
+                                    or fn.endswith((".events.jsonl", ".samples.jsonl"))):
                                 continue
                             fp = os.path.join(root, fn)
                             rel = os.path.relpath(fp, base).replace("\\", "/")
@@ -1116,7 +1129,7 @@ class WebServer:
             def _load_events(self, name):
                 """读与报告同目录的 <name>.events.jsonl（logcat 事件标注）。"""
                 if (not name or not name.endswith(".jsonl")
-                        or name.endswith(".events.jsonl")):
+                        or name.endswith((".events.jsonl", ".samples.jsonl"))):
                     return []
                 base = os.path.realpath(server.output_dir)
                 fp = os.path.realpath(os.path.join(base, name.replace(".jsonl", ".events.jsonl")))
@@ -1137,6 +1150,19 @@ class WebServer:
                 except Exception:
                     return []
                 return events
+
+            def _load_sample_detail(self, name):
+                if not name.endswith(".jsonl") or name.endswith((".samples.jsonl", ".events.jsonl")):
+                    return {"error": "bad report name"}
+                code, report = self._report_path(name)
+                if code != 200 or not os.path.isfile(report):
+                    return {"error": "report unavailable or invalid path"}
+                code, sample = self._report_path(name[:-6] + ".samples.jsonl")
+                if code == 404:
+                    return {"available": False}
+                if code != 200 or not os.path.isfile(sample):
+                    return {"error": "invalid sample path"}
+                return load_diagnostics(report, sample)
 
             def _report_path(self, name):
                 """将用户给定的相对路径限制在 output 内，不接受穿越或绝对路径。"""
@@ -1174,7 +1200,7 @@ class WebServer:
                 self._send(200, '{"ok":true}')
 
             def _send_report_zip(self, name):
-                if not name.endswith((".jsonl", ".html")) or name.endswith(".events.jsonl"):
+                if not name.endswith((".jsonl", ".html")) or name.endswith((".events.jsonl", ".samples.jsonl")):
                     self._send(400, json.dumps({"error": "报告名称无效"}, ensure_ascii=False))
                     return
                 code, path = self._report_path(name)
@@ -1260,7 +1286,7 @@ class WebServer:
             def _load_report(self, name):
                 # 允许子目录路径，但做防穿越校验：规范化后必须仍在 output 目录内
                 if (not name or not name.endswith(".jsonl")
-                        or name.endswith(".events.jsonl")):
+                        or name.endswith((".events.jsonl", ".samples.jsonl"))):
                     return {"error": "bad name"}
                 # name 来自 URL query（parse_qs 已解码）：超长/畸形值直接拒绝，
                 # 避免 join/realpath 对极端输入做无意义处理

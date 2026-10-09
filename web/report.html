@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>perfcollect·历史看板</title>
-<link rel="stylesheet" href="/assets/style.css?v=89">
+<link rel="stylesheet" href="/assets/style.css?v=91">
 </head>
 <body>
 <header>
@@ -81,6 +81,15 @@
       <div class="summary" id="report-summary"></div>
       <!-- v61：数据完整度卡片（缺数率/缺数原因/缺数区间），无缺数时自动隐藏 -->
       <div class="completeness" id="report-completeness" style="display:none"></div>
+      <details id="sample-detail" style="padding:16px;margin:12px 0;border:1px solid #263545;border-radius:8px">
+        <summary>细粒度采样诊断</summary>
+        <p>CPU 横轴是电脑收到探针样本或查询结束的时间；长帧仅定位到读取窗口结束。SurfaceFlinger 时钟尚未对齐，不能据此认定 CPU 峰值与某一帧同时发生。</p>
+        <button type="button" id="sample-detail-load">读取原始旁车</button>
+        <p id="sample-detail-status" role="status"></p>
+        <div id="sample-detail-chart" style="height:280px;display:none"></div>
+        <p>长帧阈值 ≥50ms，独立于 Jank 判定。仅显示最近100条观察记录。</p>
+        <div style="overflow:auto;max-height:320px"><table><thead><tr><th>读取结束 (s)</th><th>间隔 (ms)</th><th>设备帧时间 (ns)</th><th>目标 / 层代次</th><th>覆盖提示</th></tr></thead><tbody id="sample-detail-frames"></tbody></table></div>
+      </details>
       <section class="chart-card">
         <div class="chart-head"><h2>FPS / Jank<span class="h2-q" title="FPS = SurfaceFlinger 上屏帧率（受屏幕刷新率封顶：60Hz 屏≤60）。引擎/开发者工具显示的多为「渲染循环帧率」（可达 61~63），两者口径不同、数值对不上属正常，非采集异常。详见 指标说明.md「一、1 口径对比」">?</span></h2><div id="stat-fps" class="stat-line"></div></div>
         <div id="chart-fps" class="chart"></div>
@@ -113,9 +122,9 @@
 <!-- v48（UI优化 3.4）：深色 toast 浮层（替代失败类 alert） -->
 <div class="pd-toast" id="pd-toast"></div>
 
-<script src="/assets/echarts.min.js?v=89"></script>
-<script src="/assets/app.js?v=89"></script>
-<script src="/assets/report_actions.js?v=89"></script>
-<script src="/assets/report.js?v=89"></script>
+<script src="/assets/echarts.min.js?v=91"></script>
+<script src="/assets/app.js?v=91"></script>
+<script src="/assets/report_actions.js?v=91"></script>
+<script src="/assets/report.js?v=91"></script>
 </body>
 </html>

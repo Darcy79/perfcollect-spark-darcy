@@ -33,6 +33,9 @@ class TargetContext:
         self._pid = pid
         self._collectors = dict(collectors)
         self._generation = 0
+        self._record_sink = None
+        self._accepting = True
+        self._stale_samples = 0
 
     def _snapshot_unlocked(self):
         # resolver 会在目标进程重启后更新 pid；优先读取其实时值，构造参数仅作兜底。
@@ -56,12 +59,37 @@ class TargetContext:
         with self._lock:
             return self._collectors[key], self._generation
 
-    def publish_if_current(self, mailbox, key, value, sampled_at, generation):
+    def set_record_sink(self, sink):
+        """Register before starting workers; called under the target ordering lock."""
+        with self._lock:
+            self._record_sink = sink
+
+    def seal_publication(self):
+        """Reject late workers before closing writers, including timed-out reads."""
+        with self._lock:
+            self._accepting = False
+            return {"stale_samples_rejected": self._stale_samples}
+
+    def publish_if_current(self, mailbox, key, value, sampled_at, generation,
+                           recording=None):
         """仅发布仍属于当前目标代次的采样结果。"""
         with self._lock:
-            if generation != self._generation:
+            if not self._accepting:
                 return False
+            if generation != self._generation:
+                self._stale_samples += 1
+                return False
+            if self._record_sink is not None:
+                self._record_sink(key, value, self._snapshot_unlocked(), recording or {})
             mailbox.publish(key, value, sampled_at)
+            return True
+
+    def record_event_if_current(self, writer, event, generation):
+        """Order backend transitions with target_switch; reject stale worker events."""
+        with self._lock:
+            if not self._accepting or generation != self._generation:
+                return False
+            writer.write(event, flush=True)
             return True
 
     def snapshot_mailbox(self, mailbox, keys, drain_keys=()):
@@ -81,6 +109,8 @@ class TargetContext:
         if not package:
             raise ValueError("包名为空")
         with self._lock:
+            if not self._accepting:
+                raise RuntimeError("capture publication is closed")
             if before_switch is not None:
                 before_switch(self._snapshot_unlocked())
             self._generation += 1

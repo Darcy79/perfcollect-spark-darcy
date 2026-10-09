@@ -16,9 +16,16 @@ class JsonlWriter:
     后台线程执行。``close`` 会排空此前接受的记录、flush 并等待线程退出。
     """
 
-    def __init__(self, path):
+    def __init__(self, path, capacity=256, enqueue_timeout=2.0,
+                 max_record_bytes=256 * 1024):
+        if capacity <= 0 or enqueue_timeout <= 0 or max_record_bytes <= 0:
+            raise ValueError("writer budgets must be positive")
         self.path = path
-        self._queue = queue.Queue()
+        self._queue = queue.Queue(maxsize=capacity)
+        self._enqueue_timeout = enqueue_timeout
+        self._max_record_bytes = max_record_bytes
+        # Never hold the consumer's state lock while waiting for queue space.
+        self._submit_lock = threading.Lock()
         self._lock = threading.Lock()
         self._ready = threading.Event()
         self._thread = None
@@ -26,6 +33,25 @@ class JsonlWriter:
         self._error = None
         self._sequence = 0
         self._written = 0
+        self._overflow_count = 0
+
+    @property
+    def stats(self):
+        with self._lock:
+            return {"capacity": self._queue.maxsize,
+                    "queued": self._queue.qsize(),
+                    "accepted": self._sequence, "written": self._written,
+                    "overflow_count": self._overflow_count,
+                    "max_record_bytes": self._max_record_bytes}
+
+    def _enqueue(self, item):
+        try:
+            self._queue.put(item, timeout=self._enqueue_timeout)
+        except queue.Full:
+            with self._lock:
+                self._overflow_count += 1
+                self._error = self._error or OSError("JSONL queue capacity exceeded")
+            self._raise_if_failed()
 
     @property
     def written_count(self):
@@ -61,16 +87,21 @@ class JsonlWriter:
     def write(self, record, flush=False):
         """提交一条记录，返回进程内单调递增的写入序号。"""
         line = json.dumps(record, ensure_ascii=False) + "\n"
+        if len(line.encode("utf-8")) > self._max_record_bytes:
+            with self._lock:
+                self._error = self._error or ValueError("JSONL record exceeds byte budget")
+            self._raise_if_failed()
         done = threading.Event() if flush else None
-        with self._lock:
+        with self._submit_lock:
             if self._state != "open":
                 raise RuntimeError("JsonlWriter 未启动或已关闭")
             if self._error is not None:
                 error = self._error
                 raise OSError(f"JSONL 写入失败: {error}") from error
-            self._sequence += 1
-            sequence = self._sequence
-            self._queue.put(("line", sequence, line, done))
+            sequence = self._sequence + 1
+            self._enqueue(("line", sequence, line, done))
+            with self._lock:
+                self._sequence = sequence
         if done is not None:
             done.wait()
             self._raise_if_failed()
@@ -79,16 +110,17 @@ class JsonlWriter:
     def flush(self):
         """等待此前提交的记录全部写入并刷盘。"""
         done = threading.Event()
-        with self._lock:
+        with self._submit_lock:
             if self._state != "open":
                 raise RuntimeError("JsonlWriter 未启动或已关闭")
-            self._queue.put(("flush", done))
+            self._raise_if_failed()
+            self._enqueue(("flush", done))
         done.wait()
         self._raise_if_failed()
 
     def close(self):
         """排空队列并关闭文件；重复关闭安全。"""
-        with self._lock:
+        with self._submit_lock:
             if self._state == "closed":
                 error = self._error
                 if error is not None:
@@ -137,6 +169,8 @@ class JsonlWriter:
                 return
             if item is not None and item is not _STOP and item[0] == "line" and item[3] is not None:
                 item[3].set()
+            if item is not None and item is not _STOP and item[0] == "flush":
+                item[1].set()
             # 继续消费队列，释放 flush 等待者并等 close 的 STOP，避免调用方死锁。
             while True:
                 item = self._queue.get()

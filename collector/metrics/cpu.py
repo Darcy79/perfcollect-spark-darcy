@@ -27,6 +27,11 @@ class CpuCollector:
         self._last_ts = None
         self._last_pid = None   # 上次采样的进程（重启换 pid 后重置，防跨进程差值）
 
+    def reset_baseline(self):
+        """Backend changes cannot reuse the other backend's counter/time pair."""
+        self._last_busy = self._last_total = self._last_proc = None
+        self._last_ts = self._last_pid = None
+
     def _probe_clk_tck(self):
         try:
             out = self.adb.shell(["getconf", "CLK_TCK"])

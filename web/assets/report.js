@@ -4,6 +4,56 @@
  */
 (function () {
   var charts = { fps: null, frametime: null, cpu: null, mem: null, net: null, temp: null };
+  var detailChart = null;
+  var detailRequest = 0;
+  function resetSampleDetail() {
+    detailRequest++;
+    if (detailChart) { detailChart.dispose(); detailChart = null; }
+    document.getElementById('sample-detail').open = false;
+    document.getElementById('sample-detail-chart').style.display = 'none';
+    document.getElementById('sample-detail-status').textContent = '';
+    document.getElementById('sample-detail-frames').textContent = '';
+    document.getElementById('sample-detail-load').disabled = false;
+  }
+  function loadSampleDetail() {
+    if (!selected) return;
+    var request = ++detailRequest, seq = loadingSeq;
+    var button = document.getElementById('sample-detail-load');
+    var status = document.getElementById('sample-detail-status');
+    button.disabled = true;
+    status.textContent = '正在读取原始旁车…';
+    fetch('/api/sample-detail?name=' + encodeURIComponent(selected)).then(function (r) { return r.json(); }).then(function (data) {
+      if (request !== detailRequest || seq !== loadingSeq) return;
+      if (data.error) throw new Error(data.error);
+      if (!data.available) { status.textContent = '这份报告没有原始采样旁车。'; return; }
+      status.textContent = 'CPU 显示 ' + data.cpu.length + ' / ' + data.counts.cpu + ' 个样本；长帧显示 ' + data.long_frames.length + ' / ' + data.counts.long_frames + ' 条。覆盖异常窗口 ' + data.counts.coverage_windows + '，无时间基准样本 ' + data.counts.untimed_samples + '，无效记录 ' + data.scan.invalid_rows + '。' + (data.scan.complete ? '' : '读取预算或文件尾不完整：只显示已读取部分。');
+      var chartEl = document.getElementById('sample-detail-chart');
+      chartEl.style.display = 'block';
+      if (!detailChart) detailChart = echarts.init(chartEl);
+      detailChart.setOption({ animation: false, tooltip: { trigger: 'axis' }, legend: { data: ['进程 CPU（单核口径）', '整机 CPU'] },
+        xAxis: { type: 'value', name: '主机接收 / 查询结束 (s)' }, yAxis: { type: 'value', name: '%' },
+        dataZoom: [{ type: 'inside' }, { type: 'slider' }],
+        series: [{ name: '进程 CPU（单核口径）', type: 'line', showSymbol: false, connectNulls: false, data: window.PerfCharts.sampleCpuSeries(data.cpu, 'cpu_proc_pct') },
+                 { name: '整机 CPU', type: 'line', showSymbol: false, connectNulls: false, data: window.PerfCharts.sampleCpuSeries(data.cpu, 'cpu_total_pct') }] }, true);
+      var body = document.getElementById('sample-detail-frames');
+      body.textContent = '';
+      data.long_frames.forEach(function (frame) {
+        var tr = document.createElement('tr');
+        [frame.t_ms == null ? '无基准' : (frame.t_ms / 1000).toFixed(3), frame.interval_ms.toFixed(2), frame.device_present_ns,
+         String(frame.target_generation) + ' / ' + String(frame.layer_generation), frame.coverage_flags].forEach(function (value) {
+          var td = document.createElement('td'); td.textContent = value; td.style.padding = '6px'; tr.appendChild(td);
+        });
+        body.appendChild(tr);
+      });
+    }).catch(function (error) {
+      if (request === detailRequest && seq === loadingSeq) status.textContent = '读取失败：' + error.message;
+    }).finally(function () {
+      if (request === detailRequest && seq === loadingSeq) button.disabled = false;
+    });
+  }
+  document.getElementById('sample-detail-load').addEventListener('click', loadSampleDetail);
+  document.getElementById('sample-detail').addEventListener('toggle', function () { if (detailChart && this.open) detailChart.resize(); });
+  window.addEventListener('resize', function () { if (detailChart) detailChart.resize(); });
   var selected = null;
   var allRuns = [];
   var lastRunsSig = null;   // 历史列表变化签名（v36：无变化时不重建 DOM，避免每 5s 轮询闪动）
@@ -219,6 +269,7 @@
   }
 
   function selectRun(name) {
+    resetSampleDetail();
     selected = name;
     // v36 修复：loadRuns 有签名检测（无变化直接 return），点击记录后列表高亮不会
     // 更新 → 这里直接重绘列表（数据未变，仅 selected 高亮变化），避免"点了没反应"

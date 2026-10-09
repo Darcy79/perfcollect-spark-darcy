@@ -140,6 +140,8 @@ class FpsCollector:
         self._last_seen_ts = None  # 上次缓冲最大有效帧时间戳（用于"只算新帧"）
         # 最近一次由新帧算出的帧时间分布（无新帧时沿用；层切换时随基准一并重置）
         self._last_frame_stats = None
+        self._raw_last_ts = None
+        self._raw_layer_generation = 0
         # FPS 双通道（2026-08-13 扩展支持任意 App）：
         #   sf  = SurfaceFlinger --latency（微信小游戏 SurfaceView 层）
         #   gfx = dumpsys gfxinfo 增量（普通 View 应用——SF 窗口层无帧统计）
@@ -226,6 +228,8 @@ class FpsCollector:
         self._last_max_ts = None
         self._last_seen_ts = None
         self._last_frame_stats = None
+        self._raw_last_ts = None
+        self._raw_layer_generation += 1
 
     def _set_layer(self, layer):
         """记录当前层及其类型（SurfaceView 层才有 SF 帧统计）。
@@ -446,6 +450,47 @@ class FpsCollector:
                 return hz * FPS_CAP_REFRESH_FACTOR
         return FPS_CAP_FALLBACK_HZ
 
+    def _raw_frames(self, timestamps):
+        """Independent evidence stream; never changes the FPS/Jank baseline.
+
+        SF timestamps are kept as decimal strings (JS Number cannot represent
+        every nanosecond). Only an overlapping buffer proves the cross-read
+        interval; no overlap is a coverage warning, not a measured lost count.
+        """
+        stamps = sorted(set(timestamps))
+        previous = self._raw_last_ts
+        flags = []
+        if stamps and previous is not None and stamps[-1] < previous:
+            self._raw_layer_generation += 1
+            previous = None
+            flags.append("timestamp_regression")
+        if previous is None:
+            flags.append("initial_buffer")
+        fresh = [stamp for stamp in stamps if previous is None or stamp > previous]
+        predecessor = previous if previous in stamps else None
+        if fresh and previous is not None and predecessor is None:
+            flags.append("buffer_no_overlap")
+        if not stamps:
+            flags.append("empty_buffer")
+        # A bounded batch even if a device returns an unexpectedly large buffer.
+        omitted = max(0, len(fresh) - 4096)
+        if omitted:
+            fresh = fresh[-4096:]
+            predecessor = None
+            flags.append("batch_truncated")
+        intervals = []
+        for stamp in fresh:
+            intervals.append(str(stamp - predecessor) if predecessor is not None else None)
+            predecessor = stamp
+        if stamps:
+            self._raw_last_ts = stamps[-1]
+        return {"available": True, "source": "surfaceflinger_latency",
+                "clock_domain": "device_surfaceflinger", "clock_alignment": None,
+                "layer": self.layer, "layer_generation": self._raw_layer_generation,
+                "timestamps_ns": [str(stamp) for stamp in fresh],
+                "intervals_ns": intervals, "coverage_flags": flags,
+                "omitted_frames": omitted}
+
     def sample(self, ts):
         self._apply_process_reset()
         # gfx 通道（普通 View 应用）优先走增量
@@ -472,6 +517,7 @@ class FpsCollector:
                         "jank_rate": None, "error": err,
                         "hint": hint or "应用未在前台或无渲染层"}
 
+        queried_layer = self.layer
         try:
             out = self.adb.shell(["dumpsys", "SurfaceFlinger", "--latency", self.layer])
         except Exception as e:
@@ -497,14 +543,20 @@ class FpsCollector:
                     refresh, timestamps = self._parse_latency(out)
                     self.refresh_ns = refresh
                     n = len(timestamps)
+                    queried_layer = self.layer
                 except Exception:
                     n = 0
+                    queried_layer = None
             if n <= 1 and self._gfx_read() is not None:
                 return self._switch_to_gfx(ts)
 
         result = {"layer": self.layer, "total_frames": n, "fps": None, "jank_rate": None,
                   "jank_count": 0, "jank_total": 0,
                   "refresh_hz": round(1e9 / self.refresh_ns, 1) if self.refresh_ns else None}
+
+        result["_raw_frames"] = (
+            self._raw_frames(timestamps) if queried_layer == self.layer else
+            {"available": False, "reason": "layer_changed_during_query"})
 
         # 新鲜度：以"缓冲最新帧时间戳是否推进"判断（帧时间戳与 uptime 基准不同，
         # 不能直接比较；持续渲染则最新帧单调前移，静止/暂停则不变）

@@ -160,7 +160,7 @@ class _TargetContext:
     def capture_sampler(self, key):
         return self.sampler, self.generation
 
-    def publish_if_current(self, mailbox, key, value, sampled_at, generation):
+    def publish_if_current(self, mailbox, key, value, sampled_at, generation, recording=None):
         if generation != self.generation:
             return False
         mailbox.publish(key, value, sampled_at)
@@ -236,7 +236,7 @@ class TestSamplerScheduler(unittest.TestCase):
 
         scheduler = SamplerScheduler(
             session, object(), object(), {"fps": 1.0},
-            sample_once=sample_once, clock=lambda: 10.3)
+            sample_once=sample_once, clock=iter([10.0, 10.3]).__next__)
         scheduler._run_metric("fps", 1.0)
 
         self.assertEqual(len(session.waits), 1)

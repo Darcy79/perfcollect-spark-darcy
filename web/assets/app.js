@@ -1948,7 +1948,70 @@
     });
   }
 
+  // Receive every point immediately; schedule chart work independently.
+  function createLiveBuffer(onRender, options) {
+    options = options || {};
+    var limit = options.limit || 300;
+    var delay = options.delay == null ? 500 : options.delay;
+    var schedule = options.schedule || setTimeout;
+    var cancel = options.cancel || clearTimeout;
+    var data = [], lastSeq = -1, timer = null, dirty = false;
+    var stats = { received: 0, duplicates: 0, trimmed: 0, renders: 0 };
+    function flush() {
+      if (timer !== null) cancel(timer);
+      timer = null;
+      if (!dirty) return;
+      dirty = false;
+      stats.renders++;
+      onRender(data.slice());
+    }
+    return {
+      accept: function (batch) {
+        if (!Array.isArray(batch)) return;
+        batch.forEach(function (row) {
+          if (!row || typeof row._seq !== 'number' || !isFinite(row._seq) ||
+              typeof row.t_ms !== 'number' || !isFinite(row.t_ms)) return;
+          if (row._seq <= lastSeq) { stats.duplicates++; return; }
+          lastSeq = row._seq;
+          data.push(row);
+          stats.received++;
+          if (data.length > limit) { data.shift(); stats.trimmed++; }
+          dirty = true;
+        });
+        if (dirty && timer === null) timer = schedule(flush, delay);
+      },
+      flush: flush,
+      clear: function () {
+        if (timer !== null) cancel(timer);
+        timer = null;
+        dirty = false;
+        data = [];
+        // Retain the high-water mark: a reconnect may replay pre-switch rows.
+      },
+      snapshot: function () { return data.slice(); },
+      stats: function () { return Object.assign({}, stats); },
+    };
+  }
+
+  // Preserve actual host times and break across target/backend/PID changes or gaps.
+  function sampleCpuSeries(points, field) {
+    var result = [], previous = null;
+    (points || []).forEach(function (point) {
+      if (typeof point.t_ms !== 'number' || !isFinite(point.t_ms)) { previous = null; result.push([null, null]); return; }
+      if (previous && (point.target_generation !== previous.target_generation || point.backend !== previous.backend ||
+          point.pid !== previous.pid || point.t_ms <= previous.t_ms || point.t_ms - previous.t_ms > 5000)) {
+        result.push([point.t_ms / 1000, null]);
+      }
+      var value = typeof point[field] === 'number' && isFinite(point[field]) ? point[field] : null;
+      result.push([point.t_ms / 1000, value]);
+      previous = point;
+    });
+    return result;
+  }
+
   window.PerfCharts = {
+    sampleCpuSeries: sampleCpuSeries,
+    createLiveBuffer: createLiveBuffer,
     makeChart: makeChart,
     initSortable: initSortable,
     enableLink: enableLink,

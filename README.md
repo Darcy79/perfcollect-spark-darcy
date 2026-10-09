@@ -42,6 +42,67 @@ cd collector && uv run --no-project python main.py --web
 > 报告顶部若出现**告警横幅**（如"疑似采错进程"），先读 `指标说明.md`「十、数据健全性自检」按指引处理，再决定数据是否可用。
 > 换了一台新手机？按 `devices.md` 的「换机验收步骤」先跑 30 秒验证。
 
+## 逐次采样数据
+
+v112 在每份报告目录中额外生成同主干的 `*.samples.jsonl`。它保存五类指标的每次
+采样结果，以及 SurfaceFlinger 通道可获得的原始呈现时间戳和帧间隔；主 JSONL、
+CSV 和 HTML 继续使用原有统计口径。历史看板不会将旁车列成报告，下载报告 ZIP 会包含它。
+
+旁车独立使用 schema v1，纳秒字段为十进制字符串；主机查询时间与设备帧时间属于
+不同时间域，`device_to_host_anchor=null` 表示尚无时钟校准。`buffer_no_overlap`
+表示前后缓冲无交集，不能据此推算丢帧数；`omitted_frames` 仅统计批次容量截断。
+停止记录中的 `unfinished_workers` 非空表示有查询未在停止等待预算内完成。
+分析程序可用 `collector/sample_recording.py` 的 `iter_samples()` 逐条读取。
+
+当前回归基线：Python 385 项、JS 217 断言，前端资源 v91。
+
+实时看板保留最近300个报告点，按序号去重，接收后每0.5秒合并绘图；采样周期与
+绘图周期互相独立。原始CPU/逐帧数据仍保存在旁车中，实时图使用原有报告点口径。
+
+## 独立采样周期
+
+`--interval` 控制主循环报告汇总周期。各指标线程周期可另用只读 JSON 文件设置，
+例如 `sampling.json` 内容为 `{"cpu": 0.5}`，在 collector 目录运行：
+
+```powershell
+uv run --no-project python main.py --web --sampling-config sampling.json
+```
+
+未指定的指标沿用默认值：FPS 0.5s、CPU/网络 1s、内存/温度 2s。查询后端允许
+CPU 0.3–60s、FPS 0.5–60s、网络 1–60s、内存/温度 2–60s；配置不写回本机目标文件。
+低于 1s 的 CPU 查询属于实验性设置，实际周期和采集开销需要按设备测量。
+生效设置保存在两个 JSONL 的 meta；`/api/status` 的 `sampling_runtime` 和旁车
+`capture_end` 保存实际周期/耗时累计值及最大值、样本数、发布数和执行超预算次数。
+`period_total_s / period_count` 可计算平均实际周期；执行超预算次数不等同于丢样本数。
+
+## 可选 CPU 探针（实验性）
+
+默认仍使用 ADB 查询。自研探针源码在 `collector/probes/PerfCollectCpuProbe.java`，
+构建需要 JDK 及 Android SDK Build Tools；电脑采集运行端仍为 Python 标准库。
+在项目根目录按本机安装位置构建（示例工具版本为 36.0.0 / android-37.0）：
+
+```powershell
+uv run --no-project python collector/probes/build_cpu_probe.py --jdk "<JDK目录>" --sdk "<Android SDK目录>" --build-tools 36.0.0 --platform android-37.0 --output docs-local/cpu-probe
+```
+
+构建产物为 `docs-local/cpu-probe/classes.dex`，不随源代码默认提交。连接安卓设备后，
+可在 collector 目录显式启用：
+
+```powershell
+uv run --no-project python main.py --web --cpu-probe ../docs-local/cpu-probe/classes.dex --probe-interval 0.25
+```
+
+探针通过 `app_process` 以 shell 身份运行，不安装 APK、不注入被测应用。
+目标 Android API 26+；不同设备的 `/proc` 读取权限与运行行为需要实测确认。
+探针独占 CPU 通道，失败时回到 `--sampling-config` 指定的查询周期（默认1秒），
+其余指标不随探针提频。`cpu_backend` 事件、状态接口及旁车结束记录提供生效后端和回退原因。
+元信息中的探针设置是请求配置，不保证探针已在设备上成功启动。
+
+部署目录为 `/data/local/tmp/perfcollect_cpu_<随机标识>`。正常退出清理自身 DEX/目录；
+主机异常退出后探针通过输入关闭或5秒心跳租约自退。断连时不能保证主机端立即确认清理成功。
+设备单调时间、原始计数器与粗略锚点保存在旁车，锚点不代表与帧时间精确同步。
+本版本已通过构建、JVM合成数据和主机模拟测试，真机权限、周期或开销目前没有实测结论。
+
 ## 一键启动（不用记命令）
 
 | 文件 | 作用 |
@@ -302,3 +363,5 @@ python main.py --package com.example.game --process-pattern "" --web
 | `使用教程-保姆级.md` | ✅ 现行（教程向） | 面向零基础同事的分步图文教程，与本 README 互补 |
 | `指标说明.md` | ✅ 现行 V0.8 | 指标口径权威文档：Jank 节奏校准、统计口径、数据健全性自检 |
 | `devices.md` | ✅ 现行 | 真机适配矩阵、机型行为差异、换机验收步骤 |
+
+历史报告的「细粒度采样诊断」可按需读取同目录的 `.samples.jsonl`，查看最近3000个原始CPU样本和100条≥50ms长帧观察。CPU使用主机接收/查询结束时间；长帧只定位到读取窗口结束，SurfaceFlinger时间尚未与主机对齐，不能据此认定CPU峰值与某帧同时发生。该视图独立于报告统计，50ms阈值也独立于Jank判定。扫描上限64MiB，异常或截断会显示提示；此视图在本机历史看板中提供，自包含离线HTML保留原汇总报告。

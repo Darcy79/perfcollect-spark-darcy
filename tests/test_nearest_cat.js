@@ -614,6 +614,58 @@ const actionChecks = [];
     }));
 }
 
+// Deterministic live receive/paint batching, with no DOM or real timers.
+{
+  const timers = new Map();
+  let nextTimer = 0, renders = [];
+  const buffer = window.PerfCharts.createLiveBuffer(batch => renders.push(batch), {
+    limit: 3, delay: 500,
+    schedule: (fn, delay) => { eq(delay, 500, '实时绘制独立500ms调度'); timers.set(++nextTimer, fn); return nextTimer; },
+    cancel: id => timers.delete(id),
+  });
+  const point = (seq, t) => ({ _seq: seq, t_ms: t, fps: { fps: seq } });
+  buffer.accept([point(1, 12.5), point(2, 262.5)]);
+  buffer.accept([point(1, 12.5), point(2, 262.5), point(3, 513.5)]);
+  eq(timers.size, 1, '连续消息共用一个绘制任务');
+  eq(renders.length, 0, '接收不立即绘图');
+  buffer.flush();
+  eq(renders.length, 1, '批次只绘制一次');
+  eq(renders[0].map(r => r.t_ms).join(','), '12.5,262.5,513.5', '完整保留时间点与顺序');
+  eq(buffer.stats().duplicates, 2, '初始化快照与SSE重放去重');
+  buffer.accept([point(4, 763.5), point(5, 1013.5)]);
+  buffer.flush();
+  eq(buffer.snapshot().map(r => r._seq).join(','), '3,4,5', '实时窗口有界');
+  eq(buffer.stats().trimmed, 2, '窗口淘汰可计数');
+  buffer.accept([point(5, 1013.5)]);
+  eq(timers.size, 0, '未变化的轮询不触发绘制');
+  buffer.accept([point(6, 1263.5)]);
+  buffer.clear();
+  eq(timers.size, 0, '目标切换取消待绘制任务');
+  buffer.accept([point(6, 1263.5)]);
+  eq(buffer.snapshot().length, 0, '切换后拒收旧序号重放');
+  buffer.accept([point(7, 1513.5), null, { _seq: 8, t_ms: NaN }]);
+  buffer.flush();
+  eq(buffer.snapshot().length, 1, '无效时间数据不进入窗口');
+  const copy = buffer.snapshot(); copy.pop();
+  eq(buffer.snapshot().length, 1, '快照数组不暴露内部缓冲');
+  buffer.flush();
+  eq(renders.length, 3, '空闲flush不重复绘制');
+}
+
+{
+  const series = window.PerfCharts.sampleCpuSeries;
+  const a = { t_ms: 250.25, cpu_proc_pct: 80, target_generation: 1, backend: 'probe', pid: 3 };
+  const b = { ...a, t_ms: 500.5, cpu_proc_pct: null };
+  eq(series([a], 'cpu_proc_pct')[0][0], 0.25025, '诊断保留真实亚秒时间');
+  eq(series([a], 'cpu_proc_pct')[0][1], 80, '诊断保持单核进程CPU口径');
+  eq(series([a, b], 'cpu_proc_pct')[1][1], null, '诊断缺数断线');
+  for (const change of [{ target_generation: 2 }, { backend: 'query' }, { pid: 4 }, { t_ms: 7000 }, { t_ms: 100 }]) {
+    eq(series([a, { ...b, ...change }], 'cpu_proc_pct').length, 3, '切换/间隔/回退断线');
+  }
+  eq(series([{ ...a, t_ms: null }], 'cpu_proc_pct')[0][1], null, '无时间基准不伪造时间');
+  eq(a.t_ms, 250.25, '诊断不修改输入');
+}
+
 Promise.all(actionChecks).then(() => {
   if (failures.length) {
     console.error(`[x] 断言失败 ${failures.length} 条（通过 ${passed}）：`);

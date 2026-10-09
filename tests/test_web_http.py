@@ -59,6 +59,22 @@ class TestWebHttp(unittest.TestCase):
         conn.close()
         return result
 
+    def test_sample_detail_reads_sidecar_and_handles_legacy(self):
+        name, path = self.make_timestamp_run("20261008_100000")
+        endpoint = "/api/sample-detail?" + urlencode({"name": name})
+        code, result = self.request_json("GET", endpoint)
+        self.assertEqual(code, 200)
+        self.assertFalse(result["available"])
+        with open(path[:-6] + ".samples.jsonl", "w", encoding="utf-8") as stream:
+            stream.write(json.dumps({"event": "metric_sample", "metric": "cpu",
+                "timing": {"host_received_at": 1}, "data": {"cpu_proc_pct": 9}}) + "\n")
+        code, result = self.request_json("GET", endpoint)
+        self.assertTrue(result["available"])
+        self.assertEqual(result["cpu"][0]["cpu_proc_pct"], 9)
+        for bad in ("../outside.jsonl", name[:-6] + ".samples.jsonl", "C:/outside.jsonl"):
+            _, result = self.request_json("GET", "/api/sample-detail?" + urlencode({"name": bad}))
+            self.assertIn("error", result)
+
     def test_open_folder_validates_origin_and_path(self):
         name, path = self.make_timestamp_run("20260929_100000")
         endpoint = "/api/open-folder?" + urlencode({"name": name})
@@ -89,7 +105,7 @@ class TestWebHttp(unittest.TestCase):
         folder = os.path.dirname(path)
         stem = f"perfcollect_{run_id}"
         suffixes = (".html", ".csv", ".annotations.json", ".events.jsonl",
-                    ".crash.log", ".jsonl.remark.txt")
+                    ".samples.jsonl", ".crash.log", ".jsonl.remark.txt")
         for suffix in suffixes:
             with open(os.path.join(folder, stem + suffix), "wb") as stream:
                 stream.write(suffix.encode("utf-8"))
@@ -342,6 +358,17 @@ class TestWebHttp(unittest.TestCase):
             "GET", "/api/report?" + urlencode({"name": "run1/capture.events.jsonl"}))
         self.assertEqual(report, {"error": "bad name"})
 
+    def test_sample_sidecar_is_not_listed_or_loadable_as_report(self):
+        run_dir = os.path.join(self.tempdir.name, "run1")
+        os.makedirs(run_dir)
+        for filename in ("capture.jsonl", "capture.samples.jsonl"):
+            with open(os.path.join(run_dir, filename), "w", encoding="utf-8") as stream:
+                stream.write('{"t_ms": 1}\n')
+        _, runs = self.request_json("GET", "/api/runs")
+        self.assertEqual([run["name"] for run in runs], ["run1/capture.jsonl"])
+        _, result = self.request_json("GET", "/api/report?" + urlencode({"name": "run1/capture.samples.jsonl"}))
+        self.assertEqual(result, {"error": "bad name"})
+
     def test_rename_events_and_raw_report_round_trip(self):
         run_dir = os.path.join(self.tempdir.name, "run1")
         os.makedirs(run_dir)
@@ -586,6 +613,21 @@ class TestWebHttp(unittest.TestCase):
         conn.close()
         time.sleep(0.45)  # 让 handler 在下一次写入时观察到客户端已断开。
         self.assertEqual(handler_errors, [])
+
+    def test_sse_batch_preserves_all_points_and_timestamps(self):
+        for value in (12.5, 262.5, 513.5):
+            self.server.add_sample({"t_ms": value, "fps": {"fps": 60}})
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=2)
+        conn.request("GET", "/api/stream?batch=1")
+        response = conn.getresponse()
+        try:
+            self.assertEqual(response.status, 200)
+            line = response.readline().decode("utf-8").strip()
+            payload = json.loads(line[len("data: "):])
+            self.assertEqual([row["t_ms"] for row in payload["rows"]], [12.5, 262.5, 513.5])
+            self.assertEqual([row["_seq"] for row in payload["rows"]], [1, 2, 3])
+        finally:
+            conn.close()
 
     def test_stop_releases_port_and_is_idempotent(self):
         port = self.port

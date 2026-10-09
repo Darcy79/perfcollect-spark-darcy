@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PerfCollect 自研工具 · 实时看板</title>
-<link rel="stylesheet" href="/assets/style.css?v=89">
+<link rel="stylesheet" href="/assets/style.css?v=91">
 </head>
 <body>
 <header>
@@ -100,14 +100,21 @@
   <span>自研 PerfCollect · 数据仅存本地（output/*.jsonl）· <a href="/report.html">历史报告 →</a></span>
 </footer>
 
-<script src="/assets/echarts.min.js?v=89"></script>
-<script src="/assets/app.js?v=89"></script>
+<script src="/assets/echarts.min.js?v=91"></script>
+<script src="/assets/app.js?v=91"></script>
 <script>
 (function () {
   var charts = { fps: null, frametime: null, cpu: null, mem: null, net: null, temp: null };
   var startedAt = null;
   var rows = [];
   var pollTimer = null;
+  var stream = null;
+  var receiveEpoch = 0;
+  var pollPending = false;
+  var liveBuffer = window.PerfCharts.createLiveBuffer(function (batch) {
+    rows = batch;
+    render();
+  }, { limit: 300, delay: 500 });
   var currentTarget = null;   // 当前被测目标 {package, process_pattern}
   var appList = [];           // 已安装应用缓存
   var cores = null;           // 设备核数（/api/status），供 CPU 图"进程占整机%"曲线
@@ -132,10 +139,20 @@
     window.PerfCharts.initSortable('main');
     setInterval(refreshStatus, 2000);
     // 先拉一次已采集的数据做初始渲染，再开启 SSE 实时流
-    fetch('/api/latest').then(function (r) { return r.json(); }).then(function (data) {
-      if (data && data.length) { rows = data; render(); }
-      startStream();
-    }).catch(function () { startStream(); });
+    poll().then(startStream);
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) liveBuffer.flush();
+    });
+    window.addEventListener('pagehide', function () {
+      receiveEpoch++;
+      if (stream) stream.close();
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = null;
+      liveBuffer.flush();
+    });
+    window.addEventListener('pageshow', function (event) {
+      if (event.persisted) poll().then(startStream);
+    });
   }
 
   function render() {
@@ -224,27 +241,35 @@
   }
 
   function startStream() {
-    // SSE 优先（毫秒级推流）；不支持或断开自动降级为 1s 轮询
-    if (typeof EventSource === 'undefined') { pollTimer = setInterval(poll, 1000); return; }
-    var es = new EventSource('/api/stream');
+    if (stream) stream.close();
+    if (typeof EventSource === 'undefined') {
+      if (!pollTimer) pollTimer = setInterval(poll, 1000);
+      return;
+    }
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = null;
+    var epoch = receiveEpoch;
+    var es = stream = new EventSource('/api/stream?batch=1');
     es.onmessage = function (e) {
+      if (epoch !== receiveEpoch) return;
       try {
-        var row = JSON.parse(e.data);
-        rows.push(row);
-        if (rows.length > 300) rows = rows.slice(-300);
-        render();
+        var payload = JSON.parse(e.data);
+        liveBuffer.accept(Array.isArray(payload.rows) ? payload.rows : [payload]);
       } catch (err) {}
     };
     es.onerror = function () {
       es.close();
-      if (!pollTimer) pollTimer = setInterval(poll, 1000);
+      if (epoch === receiveEpoch && !pollTimer) pollTimer = setInterval(poll, 1000);
     };
   }
 
   function poll() {
-    fetch('/api/latest').then(function (r) { return r.json(); }).then(function (data) {
-      if (data && data.length) { rows = data; render(); }
-    }).catch(function () {});
+    if (pollPending) return Promise.resolve();
+    pollPending = true;
+    var epoch = receiveEpoch;
+    return fetch('/api/latest').then(function (r) { return r.json(); }).then(function (data) {
+      if (epoch === receiveEpoch) liveBuffer.accept(data);
+    }).catch(function () {}).then(function () { pollPending = false; });
   }
 
   // ---------------- v59 启动向导：选择要采集的进程 ----------------
