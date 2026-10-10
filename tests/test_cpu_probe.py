@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "collector"))
-from cpu_probe import CpuCounterDecoder, CpuProbeWorker, ProbeError, ProbeTransport, validate_probe_options
+from cpu_probe import CpuCounterDecoder, CpuProbeWorker, ProbeError, ProbeTransport, validate_probe_options, probe_artifact_kind, select_cpu_probe
 from capture_session import CaptureSession
 from sampling import MetricMailbox
 from target_context import TargetContext
@@ -175,6 +175,50 @@ class TestCpuProbeWorker(unittest.TestCase):
         self.assertTrue(first.closed and second.closed)
         self.assertEqual(self.query.calls + other.calls, 0)
 
+    def test_new_pid_retries_probe_after_query_fallback(self):
+        resolver = self.context.state().resolver
+        def query(ts):
+            self.query.calls += 1
+            resolver.pid = 84
+            return {"pid": 84, "cpu_proc_pct": None}
+        self.query.sample = query
+        second = FakeStream([row(pid=84)], self.session.request_stop)
+        factory = Mock(side_effect=[ProbeError("old process gone"), second])
+        worker = self.worker(factory)
+        worker.run()
+        worker.raise_if_failed()
+        self.assertEqual(factory.call_count, 2)
+        self.assertEqual(factory.call_args.args[2], 84)
+        self.assertEqual(self.query.calls, 1)
+        self.assertEqual(worker.snapshot()["active"], "device_cpu_probe")
+        self.assertTrue(second.closed)
+
+    def test_restart_during_receive_rejects_old_pid_and_rebuilds(self):
+        resolver = self.context.state().resolver
+        first = FakeStream([row()], lambda: setattr(resolver, "pid", 84))
+        second = FakeStream([row(pid=84)], self.session.request_stop)
+        records = []
+        self.context.set_record_sink(lambda key, value, target, info: records.append((value["pid"], target.pid)))
+        factory = Mock(side_effect=[first, second])
+        worker = self.worker(factory)
+        worker.run()
+        worker.raise_if_failed()
+        self.assertEqual(records, [(84, 84)])
+        self.assertEqual(worker.snapshot()["probe_samples"], 1)
+        self.assertEqual(self.context.seal_publication()["stale_samples_rejected"], 1)
+        self.assertEqual(factory.call_count, 2)
+        self.assertEqual(self.query.calls, 0)
+        self.assertTrue(first.closed and second.closed)
+
+    def test_identity_guard_rejects_changed_process_name(self):
+        self.context.state().resolver.proc_name = "other"
+        records = []
+        self.context.set_record_sink(lambda *args: records.append(args))
+        self.assertFalse(self.context.publish_if_current(self.box, "cpu", {}, 1, 0,
+                         expected_identity=(42, "game")))
+        self.assertEqual(records, [])
+        self.assertEqual(self.context.seal_publication()["stale_samples_rejected"], 1)
+
     def test_stop_race_during_worker_start_is_safe(self):
         worker = self.worker(Mock())
         self.session.request_stop()
@@ -234,7 +278,7 @@ class TestProbeTransport(unittest.TestCase):
                  "clock": "device_monotonic", "device_ns": "1234", "seq": 0}
         process = Mock(stdin=io.StringIO(), stdout=io.StringIO(json.dumps(ready) + "\n"))
         process.wait.return_value = 0
-        with patch("cpu_probe.subprocess.Popen", return_value=process) as popen:
+        with patch("cpu_probe.probe_artifact_kind", return_value="java_dex"), patch("cpu_probe.subprocess.Popen", return_value=process) as popen:
             transport.start()
             self.assertEqual(transport.anchor["device_ns"], "1234")
             self.assertGreaterEqual(int(transport.anchor["uncertainty_ns"]), 0)
@@ -247,7 +291,124 @@ class TestProbeTransport(unittest.TestCase):
         transport = ProbeTransport(Mock(_base=["adb", "-s", "test-device"]), "fake.dex", 42, "game", .25)
         process = Mock(stdin=io.StringIO(), stdout=io.StringIO('{"kind":"ready","token":"wrong"}\n'))
         process.wait.return_value = 0
-        with patch("cpu_probe.subprocess.Popen", return_value=process), self.assertRaises(ProbeError):
+        with patch("cpu_probe.probe_artifact_kind", return_value="java_dex"), patch("cpu_probe.subprocess.Popen", return_value=process), self.assertRaises(ProbeError):
             transport.start()
         self.assertIsNone(transport.process)
         self.assertFalse(transport._owned)
+
+
+class TestNativeProbeArtifact(unittest.TestCase):
+    @staticmethod
+    def elf(bits=2, machine=183, kind=3):
+        header = bytearray(64)
+        header[:7] = b"\x7fELF" + bytes([bits, 1, 1])
+        header[16:18] = kind.to_bytes(2, "little")
+        header[18:20] = machine.to_bytes(2, "little")
+        return header
+
+    def test_arm_executables_accepted_and_other_formats_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "probe.elf"
+            for bits, machine in ((2, 183), (1, 40)):
+                path.write_bytes(self.elf(bits, machine))
+                validate_probe_options(path, .25)
+                self.assertEqual(probe_artifact_kind(path), "native_c")
+            for data in (self.elf(2, 62), self.elf(2, 183, 1), self.elf(1, 183), b"\x7fELF", self.elf()[:52]):
+                path.write_bytes(data)
+                with self.assertRaises(ValueError):
+                    validate_probe_options(path, .25)
+
+    def test_native_launch_exec_permission_and_exact_owned_cleanup(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "probe.elf"
+            path.write_bytes(self.elf())
+            adb = Mock(_base=["adb", "-s", "test-device"])
+            transport = ProbeTransport(adb, path, 42, "game", .25)
+            ready = {"v": 1, "kind": "ready", "token": transport.token, "pid": 42,
+                     "clock": "device_monotonic", "device_ns": "1234", "seq": 0}
+            process = Mock(stdin=io.StringIO(), stdout=io.StringIO(json.dumps(ready) + "\n"))
+            process.wait.return_value = 0
+            with patch("cpu_probe.subprocess.Popen", return_value=process) as popen:
+                transport.start()
+                command = popen.call_args.args[0][-1]
+                self.assertIn(transport.directory + "/probe.elf", command)
+                self.assertNotIn("app_process", command)
+                self.assertEqual(transport.implementation, "native_c")
+                self.assertTrue(any("'500'" in str(c) for c in adb._run.call_args_list))
+                transport.close()
+            cleanup = adb._run.call_args_list[-2:]
+            self.assertIn(transport.directory + "/probe.elf", str(cleanup[0]))
+            self.assertNotIn("-rf", str(cleanup))
+
+    def test_failed_native_push_cleans_only_its_deployment(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "probe.elf"
+            path.write_bytes(self.elf())
+            adb = Mock(_base=["adb"])
+            def run(args, **kwargs):
+                if args[0] == "push":
+                    raise OSError("push failed")
+            adb._run.side_effect = run
+            transport = ProbeTransport(adb, path, 42, "game", .25)
+            with self.assertRaisesRegex(OSError, "push failed"):
+                transport.start()
+            self.assertFalse(transport._owned)
+            self.assertIn("probe.elf", str(adb._run.call_args_list[-2]))
+
+
+class TestDefaultNativeProbe(unittest.TestCase):
+    def test_device_abi_order_and_api_selection(self):
+        adb = Mock()
+        for properties, abi in (("34\narm64-v8a,armeabi-v7a\narm64-v8a\n", "arm64-v8a"),
+                                ("26\n\narmeabi-v7a\n", "armeabi-v7a")):
+            adb._run.return_value = properties
+            result = select_cpu_probe(adb)
+            self.assertEqual(result["abi"], abi)
+            self.assertEqual(result["implementation"], "native_c")
+            self.assertIsNone(result["reason"])
+            self.assertTrue(Path(result["path"]).is_file())
+
+    def test_unsupported_device_and_failed_preflight_keep_queries(self):
+        adb = Mock()
+        for properties, reason in (("25\narm64-v8a\n", "native_probe_requires_api26"),
+                                   ("34\nx86_64,x86\nx86_64\n", "native_probe_unsupported_abi"),
+                                   ("invalid\n", "native_probe_preflight_failed")):
+            adb._run.return_value = properties
+            result = select_cpu_probe(adb)
+            self.assertIsNone(result["path"])
+            self.assertTrue(result["reason"].startswith(reason))
+        adb._run.side_effect = TimeoutError("unavailable")
+        self.assertIn("unavailable", select_cpu_probe(adb)["reason"])
+
+    def test_missing_invalid_or_wrong_abi_bundle_keeps_queries(self):
+        adb = Mock(); adb._run.return_value = "34\narm64-v8a\n"
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "perfcollect_cpu_arm64-v8a.elf"
+            for content in (None, b"dex\n035\x00payload",
+                            (Path(__file__).parents[1] / "collector/probes/bin/perfcollect_cpu_armeabi-v7a.elf").read_bytes()):
+                if content is not None:
+                    path.write_bytes(content)
+                result = select_cpu_probe(adb, artifact_dir=folder)
+                self.assertIsNone(result["path"])
+                self.assertTrue(result["reason"].startswith("native_probe_preflight_failed"))
+
+    def test_explicit_and_disabled_do_not_probe_device(self):
+        adb = Mock()
+        result = select_cpu_probe(adb, None)
+        self.assertEqual(result["mode"], "query")
+        self.assertEqual(result["reason"], "disabled_by_user")
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "classes.dex"; path.write_bytes(b"dex\n035\x00payload")
+            result = select_cpu_probe(adb, str(path))
+            self.assertEqual(result["implementation"], "java_dex")
+            self.assertEqual(result["path"], str(path.resolve()))
+        adb._run.assert_not_called()
+
+    def test_distribution_includes_both_production_bundles(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("probe_packaging_test", Path(__file__).parents[1] / "tools/make_zip.py")
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        paths = {rel for _, rel in module.collect()}
+        for abi in ("arm64-v8a", "armeabi-v7a"):
+            self.assertIn("collector/probes/bin/perfcollect_cpu_" + abi + ".elf", paths)
+        self.assertFalse(any("docs-local" in path or path.startswith("collector/output/") for path in paths))

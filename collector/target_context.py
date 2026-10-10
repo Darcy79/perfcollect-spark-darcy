@@ -71,7 +71,7 @@ class TargetContext:
             return {"stale_samples_rejected": self._stale_samples}
 
     def publish_if_current(self, mailbox, key, value, sampled_at, generation,
-                           recording=None):
+                           recording=None, expected_identity=None):
         """仅发布仍属于当前目标代次的采样结果。"""
         with self._lock:
             if not self._accepting:
@@ -79,8 +79,12 @@ class TargetContext:
             if generation != self._generation:
                 self._stale_samples += 1
                 return False
+            target = self._snapshot_unlocked()
+            if expected_identity is not None and (target.pid, target.proc_name) != expected_identity:
+                self._stale_samples += 1
+                return False
             if self._record_sink is not None:
-                self._record_sink(key, value, self._snapshot_unlocked(), recording or {})
+                self._record_sink(key, value, target, recording or {})
             mailbox.publish(key, value, sampled_at)
             return True
 

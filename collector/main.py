@@ -23,7 +23,7 @@ from adb import Adb, AdbError
 from pidresolver import PidResolver
 from metrics.fps import FpsCollector
 from metrics.cpu import CpuCollector
-from cpu_probe import CpuProbeWorker, validate_probe_options
+from cpu_probe import CpuProbeWorker, validate_probe_options, select_cpu_probe
 from metrics.mem import MemCollector
 from metrics.network import NetworkCollector
 from metrics.thermal import ThermalCollector
@@ -94,7 +94,11 @@ def main():
                     help="采集时长(秒)，覆盖 config.duration_s；0=手动停止")
     ap.add_argument("--interval", type=float, default=None,
                     help="采样间隔(秒)，覆盖 config.interval_ms")
-    ap.add_argument("--cpu-probe", default=None, help="实验性 CPU 探针 DEX 路径；不传则使用查询后端")
+    probe_options = ap.add_mutually_exclusive_group()
+    ap.add_argument("--fps-query-mode", choices=("persistent", "oneshot"), default="persistent",
+                        help="FPS查询通信：默认复用专用ADB shell；oneshot恢复逐次启动")
+    probe_options.add_argument("--cpu-probe", default="auto", help="CPU 探针 DEX/ARM ELF 路径；默认 auto 按设备ABI选择内置C探针")
+    probe_options.add_argument("--no-cpu-probe", dest="cpu_probe", action="store_const", const=None, help="关闭CPU探针，使用ADB查询")
     ap.add_argument("--probe-interval", type=float, default=0.25, help="设备探针采样周期（秒，默认0.25）")
     ap.add_argument("--sampling-config", default=None, help="独立指标周期 JSON（秒），不改变报告汇总周期")
     ap.add_argument("--output", default="output", help="输出目录")
@@ -112,14 +116,7 @@ def main():
     try:
         args.interval, args.duration = resolve_capture_timing(args.interval, args.duration, cfg)
         sampler_intervals = load_sampling_intervals(args.sampling_config)
-        validate_probe_options(args.cpu_probe, args.probe_interval)
-        sampling_info = sampling_descriptor(sampler_intervals, args.interval)
-        if args.cpu_probe:
-            sampling_info["backend"] = "per_metric"
-            sampling_info["streaming"] = True
-            sampling_info["cpu_probe"] = {"requested": True, "interval_s": args.probe_interval,
-                                           "fallback_interval_s": sampler_intervals["cpu"],
-                                           "experimental": True}
+        validate_probe_options(None if args.cpu_probe == "auto" else args.cpu_probe, args.probe_interval)
     except (ValueError, OSError) as e:
         ap.error(str(e))
     package = args.package if args.package is not None else cfg.get("package", "com.tencent.mm")
@@ -132,6 +129,7 @@ def main():
 
     try:
         adb = Adb(serial)
+        adb.fps_query_mode = args.fps_query_mode
     except AdbError as e:
         print(f"[-] {e}")
         sys.exit(1)
@@ -150,6 +148,27 @@ def main():
         except Exception as e:
             print(f"[-] 获取前台窗口失败: {e}")
         sys.exit(0)
+
+    try:
+        probe_selection = select_cpu_probe(adb, args.cpu_probe)
+    except (ValueError, OSError) as error:
+        ap.error(str(error))
+    args.cpu_probe = probe_selection["path"]
+    sampling_info = sampling_descriptor(sampler_intervals, args.interval)
+    sampling_info["fps_query_mode"] = args.fps_query_mode
+    sampling_info["cpu_probe"] = {"requested": bool(args.cpu_probe), "mode": probe_selection["mode"],
+                                  "interval_s": args.probe_interval,
+                                  "implementation": probe_selection["implementation"],
+                                  "fallback_interval_s": sampler_intervals["cpu"],
+                                  "reason": probe_selection["reason"]}
+    query_backend_status = {"requested": "native_c" if probe_selection["mode"] == "auto" else "adb_query",
+                            "active": "adb_query", "reason": probe_selection["reason"]}
+    if args.cpu_probe:
+        sampling_info["backend"] = "per_metric"
+        sampling_info["streaming"] = True
+        print(f"[+] CPU探针: {probe_selection['implementation']}，周期 {args.probe_interval}s")
+    else:
+        print(f"[!] CPU使用查询采集: {probe_selection['reason']}")
 
     # Ctrl+C、Web 停止/退出与后台采集线程共用同一会话生命周期。
     session = CaptureSession()
@@ -563,7 +582,7 @@ def main():
             sample_recording.check()
             if web:
                 web.set_status(sampling_runtime=sampler_scheduler.snapshot(),
-                               cpu_backend=cpu_backend.snapshot() if cpu_backend else None)
+                               cpu_backend=cpu_backend.snapshot() if cpu_backend else query_backend_status)
             ts = time.time()
             if args.duration and (ts - start) >= args.duration:
                 break
@@ -651,7 +670,7 @@ def main():
         finally:
             if web:
                 web.set_status(running=False, sampling_runtime=sampler_scheduler.snapshot(),
-                               cpu_backend=cpu_backend.snapshot() if cpu_backend else None)
+                               cpu_backend=cpu_backend.snapshot() if cpu_backend else query_backend_status)
             try:
                 _stop_event_capture()
             finally:

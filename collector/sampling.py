@@ -86,6 +86,17 @@ class SamplerScheduler:
             raise RuntimeError(f"采样线程异常，采集已停止: {failures}")
 
     def _run_metric(self, key, interval):
+        try:
+            self._run_metric_loop(key, interval)
+        finally:
+            # The FPS worker is the sole user of the shared, target-independent channel.
+            if key == "fps" and hasattr(self._target_context, "capture_sampler"):
+                sampler, _ = self._target_context.capture_sampler(key)
+                close = getattr(getattr(sampler, "adb", None), "close_fps_shell", None)
+                if close is not None:
+                    close()
+
+    def _run_metric_loop(self, key, interval):
         previous_start = None
         while not self._session.is_stopping:
             started = self._clock()

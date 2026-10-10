@@ -54,10 +54,16 @@ CSV 和 HTML 继续使用原有统计口径。历史看板不会将旁车列成�
 停止记录中的 `unfinished_workers` 非空表示有查询未在停止等待预算内完成。
 分析程序可用 `collector/sample_recording.py` 的 `iter_samples()` 逐条读取。
 
-当前回归基线：Python 385 项、JS 217 断言，前端资源 v91。
+当前回归基线：Python 405 项、JS 217 断言，前端资源 v91。
+
+FPS保持2Hz SurfaceFlinger查询，默认复用专用ADB shell减少逐次启动客户端；通道异常自动回退，`--fps-query-mode oneshot`可使用原查询方式。CPU默认C探针4Hz及绘图默认节奏保持原值。
 
 实时看板保留最近300个报告点，按序号去重，接收后每0.5秒合并绘图；采样周期与
 绘图周期互相独立。原始CPU/逐帧数据仍保存在旁车中，实时图使用原有报告点口径。
+
+CPU默认按设备ABI启用内置C探针（4Hz），支持API26+的ARM64/ARMv7；
+C探针无需启动ART。`--probe-interval`控制CPU周期，其他指标和报告周期独立。
+显式关闭探针或探针失败时使用查询后端。
 
 ## 独立采样周期
 
@@ -75,33 +81,43 @@ CPU 0.3–60s、FPS 0.5–60s、网络 1–60s、内存/温度 2–60s；配置�
 `capture_end` 保存实际周期/耗时累计值及最大值、样本数、发布数和执行超预算次数。
 `period_total_s / period_count` 可计算平均实际周期；执行超预算次数不等同于丢样本数。
 
-## 可选 CPU 探针（实验性）
+## CPU设备端探针
 
-默认仍使用 ADB 查询。自研探针源码在 `collector/probes/PerfCollectCpuProbe.java`，
-构建需要 JDK 及 Android SDK Build Tools；电脑采集运行端仍为 Python 标准库。
-在项目根目录按本机安装位置构建（示例工具版本为 36.0.0 / android-37.0）：
-
-```powershell
-uv run --no-project python collector/probes/build_cpu_probe.py --jdk "<JDK目录>" --sdk "<Android SDK目录>" --build-tools 36.0.0 --platform android-37.0 --output docs-local/cpu-probe
-```
-
-构建产物为 `docs-local/cpu-probe/classes.dex`，不随源代码默认提交。连接安卓设备后，
-可在 collector 目录显式启用：
+普通命令和 `start_perfcollect.bat` 默认按手机ABI选择内置C探针，周期0.25秒（4Hz）。
+支持Android API26+的ARM64/ARMv7；不支持的设备、缺失产物或部署/读取失败自动使用CPU查询，默认周期1秒。
+FPS仍每0.5秒查询，网络每1秒、内存/温度每2秒；主报告和实时看板默认约1秒产生新点。
+CPU全部4Hz原始记录保存在采样旁车，不会因看板低频更新而丢弃。
 
 ```powershell
-uv run --no-project python main.py --web --cpu-probe ../docs-local/cpu-probe/classes.dex --probe-interval 0.25
+# 在collector目录运行；默认C探针4Hz
+uv run --no-project python main.py --web
+# 显式关闭探针，使用原CPU查询方式
+uv run --no-project python main.py --web --no-cpu-probe
+# 改为C探针1Hz
+uv run --no-project python main.py --web --probe-interval 1
+# 显式选择本项目构建的DEX或ARM ELF
+uv run --no-project python main.py --web --cpu-probe <产物路径>
 ```
 
-探针通过 `app_process` 以 shell 身份运行，不安装 APK、不注入被测应用。
-目标 Android API 26+；不同设备的 `/proc` 读取权限与运行行为需要实测确认。
-探针独占 CPU 通道，失败时回到 `--sampling-config` 指定的查询周期（默认1秒），
-其余指标不随探针提频。`cpu_backend` 事件、状态接口及旁车结束记录提供生效后端和回退原因。
-元信息中的探针设置是请求配置，不保证探针已在设备上成功启动。
+自研源码为 `collector/probes/perfcollect_cpu_probe.c`，内置正式产物位于
+`collector/probes/bin/`，随源码/zip提供。使用官方NDK r30构建，运行端不需要NDK或JDK：
 
-部署目录为 `/data/local/tmp/perfcollect_cpu_<随机标识>`。正常退出清理自身 DEX/目录；
-主机异常退出后探针通过输入关闭或5秒心跳租约自退。断连时不能保证主机端立即确认清理成功。
-设备单调时间、原始计数器与粗略锚点保存在旁车，锚点不代表与帧时间精确同步。
-本版本已通过构建、JVM合成数据和主机模拟测试，真机权限、周期或开销目前没有实测结论。
+```powershell
+# 在项目根运行，两个ABI分别构建；正式构建不要传--test-root
+uv run --no-project python collector/probes/build_native_cpu_probe.py --ndk "<NDK目录>" --abi arm64-v8a --output collector/probes/bin/perfcollect_cpu_arm64-v8a.elf
+uv run --no-project python collector/probes/build_native_cpu_probe.py --ndk "<NDK目录>" --abi armeabi-v7a --output collector/probes/bin/perfcollect_cpu_armeabi-v7a.elf
+```
+
+Java对照源码和构建脚本仍保留，需JDK及Android SDK Build Tools，不默认提供DEX。
+C探针以ADB shell身份执行，Java探针通过app_process运行；不安装APK、不注入被测应用。
+仅CPU通道使用探针。`/api/status` 的 `cpu_backend.active` 显示实际后端，`reason` 显示回退原因；
+两个JSONL的meta记录请求配置。请求配置不代表探针已成功运行。
+
+部署目录为 `/data/local/tmp/perfcollect_cpu_<随机标识>`，仅清理自身产物和目录。
+正常退出或主机输入关闭时停止，心跳失联5秒自退；断连时无法立即确认清理结果。
+设备单调时间、原始计数器和粗略锚点保存在旁车，锚点不代表与帧时间精确同步。
+主力机同场景短测C4Hz探针自身约0.41%单核CPU、0.58MiB PSS；这些不包含其他指标和ADB开销，
+不代表所有机型或长时间运行的成本。
 
 ## 一键启动（不用记命令）
 
@@ -365,3 +381,5 @@ python main.py --package com.example.game --process-pattern "" --web
 | `devices.md` | ✅ 现行 | 真机适配矩阵、机型行为差异、换机验收步骤 |
 
 历史报告的「细粒度采样诊断」可按需读取同目录的 `.samples.jsonl`，查看最近3000个原始CPU样本和100条≥50ms长帧观察。CPU使用主机接收/查询结束时间；长帧只定位到读取窗口结束，SurfaceFlinger时间尚未与主机对齐，不能据此认定CPU峰值与某帧同时发生。该视图独立于报告统计，50ms阈值也独立于Jank判定。扫描上限64MiB，异常或截断会显示提示；此视图在本机历史看板中提供，自包含离线HTML保留原汇总报告。
+
+CPU探针因进程退出而回退查询后，检测到新的PID或进程名会重新启动探针并建立差分基线；同一进程身份的失败保持查询回退。`/api/status` 的 `cpu_backend.active` 表示实际后端：`device_cpu_probe` 为探针，`adb_query` 为回退查询，原因在 `reason` 字段。启用了探针参数不代表设备上已经成功使用探针。

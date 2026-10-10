@@ -147,6 +147,30 @@ class Adb:
                     raise
                 time.sleep(0.15)
 
+    def fps_shell(self, args):
+        """Reuse a dedicated shell; on any channel failure return to ordinary queries."""
+        from adb_fps import FpsShell, FpsShellError
+        if getattr(self, "fps_query_mode", "persistent") == "oneshot" or getattr(self, "_fps_disabled", False):
+            self.fps_query_transport = "oneshot"
+            return self.shell(args)
+        try:
+            if getattr(self, "_fps_channel", None) is None:
+                self._fps_channel = FpsShell(self._base)
+            result = self._fps_channel.query(args)
+            self.fps_query_transport = "persistent"
+            return result
+        except (FpsShellError, OSError) as error:
+            self.fps_query_fallback_reason = str(error)[:200]
+            self._fps_disabled = True
+            self.close_fps_shell()
+            self.fps_query_transport = "oneshot"
+            return self.shell(args)
+
+    def close_fps_shell(self):
+        channel, self._fps_channel = getattr(self, "_fps_channel", None), None
+        if channel is not None:
+            channel.close()
+
     def exec_out(self, args, timeout=30):
         """执行 adb exec-out，返回原始 stdout（bytes，保留二进制）。
 

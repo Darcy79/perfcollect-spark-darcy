@@ -519,7 +519,7 @@ class FpsCollector:
 
         queried_layer = self.layer
         try:
-            out = self.adb.shell(["dumpsys", "SurfaceFlinger", "--latency", self.layer])
+            out = (getattr(self.adb, "fps_shell", None) or self.adb.shell)(["dumpsys", "SurfaceFlinger", "--latency", self.layer])
         except Exception as e:
             self._set_layer(None)
             self._try_resolve(ts)
@@ -539,7 +539,7 @@ class FpsCollector:
             self._try_resolve(ts)
             if self.layer and self.layer_is_surfaceview:
                 try:
-                    out = self.adb.shell(["dumpsys", "SurfaceFlinger", "--latency", self.layer])
+                    out = (getattr(self.adb, "fps_shell", None) or self.adb.shell)(["dumpsys", "SurfaceFlinger", "--latency", self.layer])
                     refresh, timestamps = self._parse_latency(out)
                     self.refresh_ns = refresh
                     n = len(timestamps)
@@ -553,6 +553,11 @@ class FpsCollector:
         result = {"layer": self.layer, "total_frames": n, "fps": None, "jank_rate": None,
                   "jank_count": 0, "jank_total": 0,
                   "refresh_hz": round(1e9 / self.refresh_ns, 1) if self.refresh_ns else None}
+
+        result["query_transport"] = getattr(self.adb, "fps_query_transport", "oneshot")
+        reason = getattr(self.adb, "fps_query_fallback_reason", None)
+        if reason:
+            result["query_transport_reason"] = reason
 
         result["_raw_frames"] = (
             self._raw_frames(timestamps) if queried_layer == self.layer else

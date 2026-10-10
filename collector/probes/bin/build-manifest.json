@@ -1,0 +1,17 @@
+{
+  "source": "perfcollect_cpu_probe.c",
+  "source_sha256": "b12586c790f1d4fe9a3c73634f5169f03d3049da97871dce4db7b18d52f37a4b",
+  "toolchain": "official Android NDK r30, windows-x86_64",
+  "api": 26,
+  "test_root": false,
+  "artifacts": {
+    "perfcollect_cpu_arm64-v8a.elf": {
+      "sha256": "796af3684f16063e3069e406cd41195fdffa1233e2e297ecb0a1e16686c746a1",
+      "bytes": 10816
+    },
+    "perfcollect_cpu_armeabi-v7a.elf": {
+      "sha256": "de19ac07c6f2a59e2bda1dd17b42a507364a2b714f6372c412d77e32abdbc513",
+      "bytes": 10596
+    }
+  }
+}

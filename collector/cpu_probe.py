@@ -20,9 +20,56 @@ def validate_probe_options(path, interval):
     if not math.isfinite(interval) or not .25 <= interval <= 60:
         raise ValueError("探针周期必须在 0.25 到 60 秒之间")
     if path:
-        with open(path, "rb") as stream:
-            if not stream.read(8).startswith(b"dex\n"):
-                raise ValueError("CPU 探针必须是由本项目源码构建的 DEX 文件")
+        probe_artifact_kind(path)
+
+
+def probe_artifact_kind(path):
+    """Accept our DEX or ARM little-endian executable; deployment failures fall back."""
+    with open(path, "rb") as stream:
+        header = stream.read(64)
+    if header.startswith(b"dex\n"):
+        return "java_dex"
+    if (len(header) >= 52 and header[:4] == b"\x7fELF" and header[5:7] == b"\x01\x01"
+            and int.from_bytes(header[16:18], "little") in (2, 3)
+            and ((header[4] == 2 and len(header) >= 64
+                  and int.from_bytes(header[18:20], "little") == 183)
+                 or (header[4] == 1 and int.from_bytes(header[18:20], "little") == 40))):
+        return "native_c"
+    raise ValueError("CPU probe must be an own-source DEX or ARM ELF executable")
+
+
+
+def select_cpu_probe(adb, requested="auto", artifact_dir=None):
+    """Select a bundled device ABI; preflight failures retain the query backend."""
+    selection = {"mode": "auto" if requested == "auto" else "explicit" if requested else "query",
+                 "path": None, "implementation": None, "reason": None}
+    if not requested:
+        selection["reason"] = "disabled_by_user"
+        return selection
+    if requested != "auto":
+        selection.update(path=str(Path(requested).resolve()), implementation=probe_artifact_kind(requested))
+        return selection
+    try:
+        properties = adb._run(["shell", "getprop ro.build.version.sdk; getprop ro.product.cpu.abilist; getprop ro.product.cpu.abi"], timeout=3).splitlines()
+        if not properties or int(properties[0].strip()) < 26:
+            selection["reason"] = "native_probe_requires_api26"
+            return selection
+        abis = ",".join(properties[1:]).replace(" ", "").split(",")
+        abi = next((name for name in abis if name in ("arm64-v8a", "armeabi-v7a")), None)
+        if abi is None:
+            selection["reason"] = "native_probe_unsupported_abi"
+            return selection
+        folder = Path(artifact_dir) if artifact_dir is not None else Path(__file__).parent / "probes" / "bin"
+        path = folder / ("perfcollect_cpu_" + abi + ".elf")
+        if probe_artifact_kind(path) != "native_c":
+            raise ValueError("bundled native probe is not an ARM ELF")
+        header = path.read_bytes()[:64]
+        if header[4] != (2 if abi == "arm64-v8a" else 1):
+            raise ValueError("bundled probe ABI mismatch")
+        selection.update(path=str(path.resolve()), implementation="native_c", abi=abi)
+    except Exception as error:
+        selection["reason"] = "native_probe_preflight_failed: " + str(error)[:300]
+    return selection
 
 
 def _number(record, key):
@@ -88,7 +135,9 @@ class CpuCounterDecoder:
 class ProbeTransport:
     """A dedicated pipe reader; never installed as a blocking metric.sample()."""
     def __init__(self, adb, dex_path, pid, name, interval):
-        self.adb, self.dex_path = adb, str(Path(dex_path).resolve())
+        self.adb, self.artifact_path = adb, str(Path(dex_path).resolve())
+        self.implementation = None
+        self.remote_filename = "probe.dex"
         self.pid, self.name, self.interval = pid, name, interval
         self.token = uuid.uuid4().hex
         self.directory = "/data/local/tmp/perfcollect_cpu_" + self.token
@@ -108,15 +157,19 @@ class ProbeTransport:
 
     def start(self):
         try:
+            self.implementation = probe_artifact_kind(self.artifact_path)
+            self.remote_filename = "probe.elf" if self.implementation == "native_c" else "probe.dex"
+            remote = self.directory + "/" + self.remote_filename
             self._shell(["mkdir", "-m", "700", self.directory])
             self._owned = True
-            self.adb._run(["push", self.dex_path, self.directory + "/probe.dex"], timeout=15)
-            # Android 14 dynamic-code loading requires read-only code files.
-            self._shell(["chmod", "400", self.directory + "/probe.dex"])
-            args = ["env", "CLASSPATH=" + self.directory + "/probe.dex", "app_process", "/",
-                    "PerfCollectCpuProbe", self.token, str(self.pid), self.name.encode("utf-8").hex(),
-                    str(round(self.interval * 1000)), self.directory]
-            command = " ".join("'" + a.replace("'", "'\\''") + "'" for a in args)
+            self.adb._run(["push", self.artifact_path, remote], timeout=15)
+            # Native code needs execute permission; Android 14 DEX must be read-only.
+            self._shell(["chmod", "500" if self.implementation == "native_c" else "400", remote])
+            prefix = ([remote] if self.implementation == "native_c" else
+                      ["env", "CLASSPATH=" + remote, "app_process", "/", "PerfCollectCpuProbe"])
+            args = prefix + [self.token, str(self.pid), self.name.encode("utf-8").hex(),
+                             str(round(self.interval * 1000)), self.directory]
+            command = ("exec " if self.implementation == "native_c" else "") + " ".join("'" + a.replace("'", "'\\''") + "'" for a in args)
             self.launch_ns = time.monotonic_ns()
             self.process = subprocess.Popen(self.adb._base + ["shell", "-T", command],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -200,7 +253,7 @@ class ProbeTransport:
             self.process = None
         if self._owned and confirmed_exit:
             try:
-                self._shell(["rm", "-f", self.directory + "/probe.dex"])
+                self._shell(["rm", "-f", self.directory + "/" + self.remote_filename])
                 self._shell(["rmdir", self.directory])
             except Exception:
                 pass  # The probe shutdown hook also removes only its own files.
@@ -251,6 +304,7 @@ class CpuProbeWorker:
     def run(self):
         transport = None
         generation = None
+        identity = None
         fallback = False
         last_record = time.monotonic()
         try:
@@ -259,20 +313,25 @@ class CpuProbeWorker:
                 state = self.context.state()
                 if state.generation != current_generation:
                     continue
-                if generation != current_generation:
+                current_identity = (current_generation, state.pid, state.proc_name)
+                if identity != current_identity:
                     if transport:
                         transport.close()
                         transport = None
                     generation, fallback = current_generation, False
+                    identity = current_identity
                     try:
                         pid = state.resolver.current_pid()
                         name = state.resolver.proc_name
                         if not pid or not name:
                             raise ProbeError("target identity unavailable")
+                        # Resolution may have refreshed the PID since the snapshot.
+                        identity = (generation, pid, name)
                         transport = self.transport_factory(self.adb, self.path, pid, name, self.interval).start()
                         decoder = CpuCounterDecoder(transport.token, pid, name, sampler.clk_tck)
                         last_record = time.monotonic()
-                        self._event(state, "device_cpu_probe", clock_anchor=transport.anchor)
+                        self._event(state, "device_cpu_probe", clock_anchor=transport.anchor,
+                                    implementation=getattr(transport, "implementation", "java_dex"))
                     except Exception as error:
                         if transport:
                             transport.close()
@@ -295,15 +354,16 @@ class CpuProbeWorker:
                     row, received, mono = transport.receive(timeout=.2)
                     result = decoder.decode(row)
                     last_record = time.monotonic()
-                    self.context.publish_if_current(self.mailbox, "cpu", result, received, generation,
-                        recording={"backend": "device_cpu_probe", "probe": row,
+                    published = self.context.publish_if_current(self.mailbox, "cpu", result, received, generation,
+                        expected_identity=(pid, name), recording={"backend": "device_cpu_probe", "probe": row,
                                    "clock_anchor": transport.anchor,
                                    "timing": {"host_received_at": received,
                                               "host_received_monotonic_ns": str(mono),
                                               "device_started_ns": row["t0_ns"],
                                               "device_completed_ns": row["t1_ns"]}})
-                    with self._lock:
-                        self._status["probe_samples"] += 1
+                    if published:
+                        with self._lock:
+                            self._status["probe_samples"] += 1
                 except Exception as error:
                     if isinstance(error, TimeoutError) and time.monotonic() - last_record <= max(3, self.interval * 3):
                         continue
