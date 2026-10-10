@@ -36,6 +36,12 @@ def sample_metric_once(target_context, mailbox, key, clock=time.time):
                    "duration_ns": str(completed_monotonic_ns - started_monotonic_ns)},
     }
     if key == "fps":
+        probe_recording = value.pop("_fps_probe_recording", None)
+        if probe_recording is not None:
+            recording["backend"] = "device_fps_probe"
+            recording["probe"] = probe_recording["probe"]
+            recording["clock_anchor"] = probe_recording["clock_anchor"]
+            recording["timing"].update({k: probe_recording[k] for k in ("device_started_ns", "device_completed_ns")})
         recording["frames"] = frames or {
             "available": False, "reason": value.get("error") or "gfxinfo_aggregate_only"}
     published = target_context.publish_if_current(
@@ -125,7 +131,10 @@ class SamplerScheduler:
                     stats["period_total_s"] += period
                     stats["period_max_s"] = max(stats["period_max_s"], period)
             previous_start = started
-            self._session.wait(max(self._minimum_delay, interval - elapsed))
+            # A device-paced FPS stream already waits for each sample. Sleeping another
+            # full period would accumulate stale queued buffers; retain a stop/yield point.
+            streamed_fps = key == "fps" and result.get("value", {}).get("query_transport") == "native_fps_probe"
+            self._session.wait(self._minimum_delay if streamed_fps else max(self._minimum_delay, interval - elapsed))
 
     def start(self):
         """启动尚未停止的指标 worker，返回已启动线程列表。"""

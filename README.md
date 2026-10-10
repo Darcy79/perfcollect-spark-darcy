@@ -54,12 +54,15 @@ CSV 和 HTML 继续使用原有统计口径。历史看板不会将旁车列成�
 停止记录中的 `unfinished_workers` 非空表示有查询未在停止等待预算内完成。
 分析程序可用 `collector/sample_recording.py` 的 `iter_samples()` 逐条读取。
 
-当前回归基线：Python 405 项、JS 217 断言，前端资源 v91。
+当前回归基线：Python 424 项、JS 237 断言，前端资源 v92。
 
-FPS保持2Hz SurfaceFlinger查询，默认复用专用ADB shell减少逐次启动客户端；通道异常自动回退，`--fps-query-mode oneshot`可使用原查询方式。CPU默认C探针4Hz及绘图默认节奏保持原值。
+FPS保持2Hz SurfaceFlinger查询，默认优先使用内置C FPS设备探针；设备不支持、部署失败或流异常时自动回退优化后的专用ADB shell，长连接协议标记使用内置echo；长连接异常再回退逐次查询。`--fps-query-mode persistent`可强制使用长连接，`--fps-query-mode oneshot`可使用原查询方式。CPU默认C探针4Hz，主报告和实时绘图默认约2Hz。
 
-实时看板保留最近300个报告点，按序号去重，接收后每0.5秒合并绘图；采样周期与
-绘图周期互相独立。原始CPU/逐帧数据仍保存在旁车中，实时图使用原有报告点口径。
+`--fps-query-mode probe`为默认模式，按设备ABI选择内置C FPS设备探针（API26+ ARM64/ARMv7），`--fps-probe PATH`指定自研ARM ELF。它在设备端按FPS配置周期查询原SurfaceFlinger接口，以可逆增量响应减少重复传输；FPS/Jank/帧时间算法不变。不可用或流异常时回退长连接查询，样本的`query_transport`与`query_transport_reason`记录实际方式及原因；CPU与绘图配置独立。探针旁车保存设备查询时间及握手锚点，不能据此将SF时钟与CPU精确对齐。
+
+实时看板保留最近600个报告点（默认2Hz时约5分钟），按序号去重；服务端每0.5秒合并推送，
+页面直接绘制新批次，避免二次等待。采样周期与绘图周期互相独立。缺数区间断线显示，
+主动暂停会单独注明，仍如实计入无值点，且不作为设备断连触发退避。原始CPU/逐帧数据仍保存在旁车中，实时图使用原有报告点口径。
 
 CPU默认按设备ABI启用内置C探针（4Hz），支持API26+的ARM64/ARMv7；
 C探针无需启动ART。`--probe-interval`控制CPU周期，其他指标和报告周期独立。
@@ -85,7 +88,7 @@ CPU 0.3–60s、FPS 0.5–60s、网络 1–60s、内存/温度 2–60s；配置�
 
 普通命令和 `start_perfcollect.bat` 默认按手机ABI选择内置C探针，周期0.25秒（4Hz）。
 支持Android API26+的ARM64/ARMv7；不支持的设备、缺失产物或部署/读取失败自动使用CPU查询，默认周期1秒。
-FPS仍每0.5秒查询，网络每1秒、内存/温度每2秒；主报告和实时看板默认约1秒产生新点。
+FPS仍每0.5秒查询，网络每1秒、内存/温度每2秒；主报告和实时看板默认约0.5秒产生新点。显式`--interval`或配置中的周期仍优先生效。
 CPU全部4Hz原始记录保存在采样旁车，不会因看板低频更新而丢弃。
 
 ```powershell
@@ -272,7 +275,7 @@ python main.py --web
   "package": "com.tencent.mm",        // 微信包名，一般不用改
   "process_pattern": "appbrand",      // 匹配小游戏子进程（微信:appbrandN）
   "serial": "",                       // 指定设备序列号，留空自动选第一台
-  "interval_ms": 1000,                // 采样间隔（毫秒）
+  "interval_ms": 500,                 // 报告汇总间隔（毫秒），独立指标周期不变
   "duration_s": 0                     // 采集时长（秒），0 = 直到手动停止
 }
 ```

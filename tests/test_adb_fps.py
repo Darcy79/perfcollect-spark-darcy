@@ -49,7 +49,7 @@ class Process:
 
 
 def response(process, data):
-    # Requests must remain a single physical shell input line, including printf formats.
+    # Requests must remain a single physical shell input line, including protocol markers.
     assert data.count(b"\n") == 1
     marker = re.search(rb"(pcfps_[a-f0-9]+_[0-9]+)_begin", data)[1]
     for line in [marker+b"_begin\r\n", b"16666666\r\n", b"1 2 3\r\n", b"\r\n", marker+b"_end:0\r\n"]:
@@ -79,6 +79,19 @@ class TestFpsShell(unittest.TestCase):
         shell.close()
         self.assertFalse(shell.reader.is_alive())
         self.assertTrue(process.stdout.closed)
+
+    def test_protocol_markers_need_no_external_formatter(self):
+        shell, process, _ = self.channel()
+        shell.query(ARGS)
+        request = process.stdin.writes[-1].decode("utf-8")
+        # Only dumpsys needs an executable; marker output must not invoke printf.
+        self.assertNotIn("printf", request)
+        marker = shell.token + "_1"
+        self.assertTrue(request.startswith("echo " + marker + "_begin; "))
+        self.assertIn("; pc_fps_status=$?; echo; echo " + marker + "_end:", request)
+        self.assertTrue(request.endswith('"$pc_fps_status"\n'))
+        self.assertEqual(request.count("\n"), 1)
+        self.assertEqual(request.count("dumpsys -t 2 SurfaceFlinger --latency"), 1)
 
     def test_layer_is_shell_quoted_and_control_characters_rejected(self):
         shell, process, _ = self.channel()

@@ -145,6 +145,27 @@ class TestScanRowsMissingMetric(unittest.TestCase):
         self.assertFalse(any(it["type"] == "missing_metric" for it in issues))
 
 
+class TestPausedMetricHealth(unittest.TestCase):
+    def test_explicit_and_legacy_pauses_are_not_missing_failures(self):
+        for legacy in (False, True):
+            rows = [{"t_ms": i * 500, **{key: ({"error": f"experiment_{key}_disabled"}
+                    if legacy else {"status": "paused"})
+                    for key in ("fps", "cpu", "mem", "therm")}} for i in range(10)]
+            self.assertFalse(any(it["type"] == "missing_metric" for it in scan_rows(rows)))
+
+    def test_pause_does_not_join_separate_short_failures(self):
+        rows = [{"t_ms": i * 500, "fps": {"error": "query_failed"}} for i in range(9)]
+        rows[4]["fps"] = {"status": "paused"}
+        missing = [it for it in scan_rows(rows)
+                   if it["type"] == "missing_metric" and it["message"].startswith("fps")]
+        self.assertEqual(missing, [])
+        for row in rows[5:]: row["fps"] = {"status": "paused", "error": "query_failed"}
+        rows.append({"t_ms": 4500, "fps": {"error": "query_failed"}})
+        missing = [it for it in scan_rows(rows)
+                   if it["type"] == "missing_metric" and it["message"].startswith("fps")]
+        self.assertEqual(missing[0]["count"], 5)
+
+
 class TestHealthSummary(unittest.TestCase):
     def test_empty(self):
         self.assertEqual(health_summary([]), "")

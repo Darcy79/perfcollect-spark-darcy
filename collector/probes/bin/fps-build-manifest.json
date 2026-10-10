@@ -1,0 +1,17 @@
+{
+  "source": "perfcollect_fps_probe.c",
+  "source_sha256": "c7d4f126dfe545d7f711943c26e1aae25a23e6a5b02c46ad6bd2a2968274e2af",
+  "toolchain": "official Android NDK r30, windows-x86_64",
+  "api": 26,
+  "test": false,
+  "artifacts": {
+    "perfcollect_fps_arm64-v8a.elf": {
+      "bytes": 11168,
+      "sha256": "a96bf8c4c8f09c7196c0c5ba2f1ef0663a26da8593e8e82e49b6e97ec650ba66"
+    },
+    "perfcollect_fps_armeabi-v7a.elf": {
+      "bytes": 10804,
+      "sha256": "ddf3ede64a3cdc7d7084979c8a5ed0c97de4406391b5a3be79d148643521fc66"
+    }
+  }
+}

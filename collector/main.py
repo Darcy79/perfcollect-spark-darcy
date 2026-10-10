@@ -2,7 +2,7 @@
 """自研 PerfCollect 采集器 — 第一阶段骨架（FPS/CPU/内存）。
 
 用法:
-    python main.py                          # 默认 config.json，1s 间隔，Ctrl+C 停止
+    python main.py                          # 默认 config.json，0.5s 报告间隔，Ctrl+C 停止
     python main.py --duration 120           # 采集 120 秒
     python main.py --interval 0.5           # 0.5s 间隔
     python main.py --output ../test1        # 指定输出目录
@@ -59,7 +59,7 @@ def resolve_capture_timing(cli_interval, cli_duration, config):
     返回 (interval_s, duration_s)，非法值抛出可直接展示给用户的 ValueError。
     """
     config = config or {}
-    raw_interval = cli_interval if cli_interval is not None else config.get("interval_ms", 1000)
+    raw_interval = cli_interval if cli_interval is not None else config.get("interval_ms", 500)
     raw_duration = cli_duration if cli_duration is not None else config.get("duration_s", 0)
     try:
         interval = float(raw_interval) if cli_interval is not None else float(raw_interval) / 1000.0
@@ -95,8 +95,9 @@ def main():
     ap.add_argument("--interval", type=float, default=None,
                     help="采样间隔(秒)，覆盖 config.interval_ms")
     probe_options = ap.add_mutually_exclusive_group()
-    ap.add_argument("--fps-query-mode", choices=("persistent", "oneshot"), default="persistent",
-                        help="FPS查询通信：默认复用专用ADB shell；oneshot恢复逐次启动")
+    ap.add_argument("--fps-query-mode", choices=("persistent", "oneshot", "probe"), default="probe",
+                        help="FPS查询通信：probe默认C探针，失败回退长连接；persistent强制长连接；oneshot逐次查询")
+    ap.add_argument("--fps-probe", default="auto", help="probe模式的FPS ARM ELF路径，默认auto选择内置产物")
     probe_options.add_argument("--cpu-probe", default="auto", help="CPU 探针 DEX/ARM ELF 路径；默认 auto 按设备ABI选择内置C探针")
     probe_options.add_argument("--no-cpu-probe", dest="cpu_probe", action="store_const", const=None, help="关闭CPU探针，使用ADB查询")
     ap.add_argument("--probe-interval", type=float, default=0.25, help="设备探针采样周期（秒，默认0.25）")
@@ -156,6 +157,13 @@ def main():
     args.cpu_probe = probe_selection["path"]
     sampling_info = sampling_descriptor(sampler_intervals, args.interval)
     sampling_info["fps_query_mode"] = args.fps_query_mode
+    if args.fps_query_mode == "probe":
+        from fps_probe import select_fps_probe
+        fps_selection = select_fps_probe(adb, args.fps_probe)
+        adb.fps_probe_path = fps_selection["path"]
+        adb.fps_probe_reason = fps_selection["reason"]
+        adb.fps_probe_interval = sampler_intervals["fps"]
+        sampling_info["fps_probe"] = {**fps_selection, "interval_s": sampler_intervals["fps"]}
     sampling_info["cpu_probe"] = {"requested": bool(args.cpu_probe), "mode": probe_selection["mode"],
                                   "interval_s": args.probe_interval,
                                   "implementation": probe_selection["implementation"],

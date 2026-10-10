@@ -150,6 +150,30 @@ class Adb:
     def fps_shell(self, args):
         """Reuse a dedicated shell; on any channel failure return to ordinary queries."""
         from adb_fps import FpsShell, FpsShellError
+        self.fps_probe_recording = None
+        if getattr(self, "fps_query_mode", "persistent") != "probe":
+            self.close_fps_probe()
+        if getattr(self, "fps_query_mode", "persistent") == "probe" and not getattr(self, "_fps_probe_disabled", False):
+            from fps_probe import FpsProbe
+            try:
+                path = getattr(self, "fps_probe_path", None)
+                if not path:
+                    raise FpsShellError(getattr(self, "fps_probe_reason", None) or "FPS probe unavailable")
+                channel = getattr(self, "_fps_probe_channel", None)
+                if channel is not None and channel.layer != args[-1]:
+                    self.close_fps_probe()
+                    channel = None
+                if channel is None:
+                    channel = FpsProbe(self, path, args[-1], getattr(self, "fps_probe_interval", .5))
+                    self._fps_probe_channel = channel
+                result = channel.query(args)
+                self.fps_probe_recording = channel.recording
+                self.fps_query_transport = "native_fps_probe"
+                return result
+            except (FpsShellError, AdbError, OSError, ValueError, subprocess.SubprocessError) as error:
+                self.fps_query_fallback_reason = "FPS probe fallback: " + str(error)[:180]
+                self._fps_probe_disabled = True
+                self.close_fps_probe()
         if getattr(self, "fps_query_mode", "persistent") == "oneshot" or getattr(self, "_fps_disabled", False):
             self.fps_query_transport = "oneshot"
             return self.shell(args)
@@ -166,7 +190,13 @@ class Adb:
             self.fps_query_transport = "oneshot"
             return self.shell(args)
 
+    def close_fps_probe(self):
+        channel, self._fps_probe_channel = getattr(self, "_fps_probe_channel", None), None
+        if channel is not None:
+            channel.close()
+
     def close_fps_shell(self):
+        self.close_fps_probe()
         channel, self._fps_channel = getattr(self, "_fps_channel", None), None
         if channel is not None:
             channel.close()

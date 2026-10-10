@@ -25,8 +25,8 @@ class TestResolveCaptureTiming(unittest.TestCase):
         self.assertEqual(interval, 2.0)
         self.assertEqual(duration, 30.0)
 
-    def test_defaults_match_existing_behavior(self):
-        self.assertEqual(resolve_capture_timing(None, None, {}), (1.0, 0.0))
+    def test_defaults_use_half_second_reports(self):
+        self.assertEqual(resolve_capture_timing(None, None, {}), (0.5, 0.0))
 
     def test_zero_duration_means_manual_stop(self):
         self.assertEqual(resolve_capture_timing(None, None, {"duration_s": 0})[1], 0.0)

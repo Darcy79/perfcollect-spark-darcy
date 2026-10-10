@@ -492,6 +492,14 @@ class FpsCollector:
                 "omitted_frames": omitted}
 
     def sample(self, ts):
+        if getattr(self.adb, "fps_query_mode", None) == "probe":
+            if (getattr(self.adb, "_fps_probe_owner", None) is not self
+                    or self._process_reset_requested.is_set()):
+                self.adb.close_fps_probe()
+                self.adb._fps_probe_owner = self
+            # Pause autonomous device work when no SF layer/gfxinfo is selected.
+            if not self.layer or self.mode == "gfx":
+                self.adb.close_fps_probe()
         self._apply_process_reset()
         # gfx 通道（普通 View 应用）优先走增量
         if self.mode == "gfx":
@@ -555,6 +563,9 @@ class FpsCollector:
                   "refresh_hz": round(1e9 / self.refresh_ns, 1) if self.refresh_ns else None}
 
         result["query_transport"] = getattr(self.adb, "fps_query_transport", "oneshot")
+        probe_recording = getattr(self.adb, "fps_probe_recording", None)
+        if probe_recording is not None:
+            result["_fps_probe_recording"] = probe_recording
         reason = getattr(self.adb, "fps_query_fallback_reason", None)
         if reason:
             result["query_transport_reason"] = reason

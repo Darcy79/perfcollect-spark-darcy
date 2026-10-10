@@ -9,7 +9,7 @@ _COLLECTOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "col
 if _COLLECTOR not in sys.path:
     sys.path.insert(0, _COLLECTOR)
 
-from runtime_health import RuntimeHealthTracker  # noqa: E402
+from runtime_health import RuntimeHealthTracker, row_has_any_value, backoff_sleep  # noqa: E402
 
 
 METRICS = ("fps", "cpu", "mem", "net", "therm")
@@ -89,3 +89,48 @@ class TestRuntimeHealthTracker(unittest.TestCase):
         self.assertEqual(seen_states, [{}, {"calls": 1}])
         self.assertEqual(first["health_alerts"], [])
         self.assertEqual(second["health_alerts"], ["alert-2"])
+
+
+class TestIntentionalMetricPause(unittest.TestCase):
+    def paused_row(self, legacy=False):
+        row = {key: ({"error": f"experiment_{key}_disabled"} if legacy else
+                     {"status": "paused", "reason": "experiment_disabled"})
+               for key in METRICS if key != "cpu"}
+        row["cpu"] = {"cpu_proc_pct": 25}
+        return row
+
+    def test_pause_never_triggers_disconnect_or_backoff(self):
+        for legacy in (False, True):
+            tracker = RuntimeHealthTracker(METRICS)
+            for _ in range(10):
+                result = tracker.update(self.paused_row(legacy))
+                self.assertEqual(result["err_codes"], [])
+                self.assertEqual(result["channel_events"], [])
+                self.assertEqual(result["fail_streak"], 0)
+                self.assertFalse(result["probe_required"])
+                self.assertEqual(backoff_sleep(.5, result["fail_streak"]), .5)
+                self.assertEqual(result["paused_metrics"], ["fps", "mem", "net", "therm"])
+
+    def test_actual_failure_of_remaining_channel_still_probes(self):
+        tracker = RuntimeHealthTracker(METRICS)
+        row = self.paused_row()
+        row["cpu"] = {"error": "device_offline"}
+        results = [tracker.update(row) for _ in range(3)]
+        self.assertEqual(results[0]["channel_events"][0]["kind"], "disconnect")
+        self.assertTrue(results[-1]["probe_required"])
+        self.assertTrue(tracker.update(self.paused_row())["recovered"])
+
+    def test_all_paused_is_recordable_and_not_disconnected(self):
+        row = {key: {"status": "paused"} for key in METRICS}
+        self.assertTrue(row_has_any_value(row))
+        tracker = RuntimeHealthTracker(METRICS)
+        for _ in range(4):
+            self.assertEqual(tracker.update(row)["fail_streak"], 0)
+
+    def test_similar_error_and_contradictory_pause_are_real_failures(self):
+        tracker = RuntimeHealthTracker(METRICS)
+        row = {key: {"status": "paused", "error": "experiment_transport_failed"}
+               for key in METRICS}
+        self.assertEqual(len(tracker.update(row)["err_codes"]), 5)
+        row = {key: {"error": "experiment_other_disabled"} for key in METRICS}
+        self.assertEqual(len(tracker.update(row)["err_codes"]), 5)

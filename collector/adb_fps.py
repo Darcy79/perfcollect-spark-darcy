@@ -69,9 +69,12 @@ class FpsShell:
             begin, end = marker + "_begin", marker + "_end:"
             # dumpsys has a bounded device-side lifetime even if the host disconnects.
             command = shlex.join(["dumpsys", "-t", "2", *args[1:]])
-            script = ("printf '%s\\n' " + shlex.quote(begin) + "; " + command +
-                      "; pc_fps_status=$?; printf '\\n%s%s\\n' " + shlex.quote(end) +
-                      ' "$pc_fps_status"\n')
+            # Markers are fixed ASCII without echo options/escapes. Android sh has
+            # builtin echo; printf may be an external executable on the device.
+            # Save dumpsys status first and keep the separator even without its LF.
+            script = ("echo " + shlex.quote(begin) + "; " + command +
+                      "; pc_fps_status=$?; echo; echo " + shlex.quote(end) +
+                      '"$pc_fps_status"\n')
             try:
                 self.process.stdin.write(script.encode("utf-8"))
                 self.process.stdin.flush()

@@ -902,7 +902,19 @@
   }
   // v58：series 支持 idxArr（降采样显示索引）——仅对显示数据抽稀，统计仍走全量
   function series(rows, getter, idxArr) {
-    if (idxArr) return idxArr.map(function (i) { return getter(rows[i]); });
+    // A skipped missing value must still break a long report's displayed line.
+    // Statistics continue to use the complete input, independent of display thinning.
+    if (idxArr) {
+      var previous = -1;
+      return idxArr.map(function (i) {
+        var value = getter(rows[i]);
+        for (var j = previous + 1; j < i; j++) {
+          if (getter(rows[j]) == null) { value = null; break; }
+        }
+        previous = i;
+        return value;
+      });
+    }
     return rows.map(getter);
   }
 
@@ -924,7 +936,7 @@
   // highlight/downplay。ECharts 默认 emphasis 会重画曲线，接近 3000 点时
   // 肉眼可见为线条闪烁。禁用线系列 hover 强调，但保留 axisPointer/
   // tooltip 和跨图白线联动，数据与点击锁定逻辑不变。
-  var baseLine = { type: 'line', showSymbol: false, connectNulls: true,
+  var baseLine = { type: 'line', showSymbol: false, connectNulls: false,
                    lineStyle: { width: 1.6 }, sampling: 'lttb',
                    emphasis: { disabled: true } };
 
@@ -1423,6 +1435,7 @@
 
   // 缺数原因码 → 人话（与采集端错误码一一对应，见 指标说明.md「一、1」「十」）
   var COMPLETENESS_REASONS = {
+    paused: '主动暂停采集',
     probe_fail: '链路读取失败',
     gfx_unavailable: 'gfxinfo 不支持该应用，已回退 SurfaceFlinger',
     no_layer: '无渲染层(不在前台)',
@@ -1436,6 +1449,13 @@
   };
 
   function _isValue(v) { return v != null && typeof v === 'number' && isFinite(v); }
+
+  function metricMissingReason(key, value, fallback) {
+    value = value || {};
+    if (value.error === 'experiment_' + key + '_disabled' ||
+        (value.status === 'paused' && !value.error)) return 'paused';
+    return fallback || 'no_value';
+  }
 
   function _reasonText(code) { return COMPLETENESS_REASONS[code] || code; }
 
@@ -1459,7 +1479,8 @@
           return;
         }
         missing++;
-        var code = (m.err && m.err(r)) || 'no_value';
+        var metricKey = m.key === 'frametime' ? 'fps' : (m.key === 'temp' ? 'therm' : m.key);
+        var code = metricMissingReason(metricKey, r[metricKey], m.err && m.err(r));
         reasons[code] = (reasons[code] || 0) + 1;
         var t = Math.round((r.t_ms || 0) / 100) / 10;
         if (run) { run.to = t; run.n++; } else { run = { from: t, to: t, n: 1 }; }
@@ -1486,7 +1507,7 @@
       var f = r.fps || {};
       if (_isValue(f.fps)) return;
       missing++;
-      var c = f.error || 'no_value';
+      var c = metricMissingReason('fps', f, f.error);
       reasons[c] = (reasons[c] || 0) + 1;
     });
     if (!missing) return '';
@@ -1550,7 +1571,7 @@
         '</div>';
     }
     body += '<div class="cmpl-note">缺数 = 该采样点取不到值（多为设备/adb 链路抖动，' +
-      '或目标不在前台），曲线在此处断开是如实记录；「无原因码」多为采样未就绪或历史数据' +
+      '或目标不在前台；主动暂停会单独注明），曲线在此处断开是如实记录；「无原因码」多为采样未就绪或历史数据' +
       '未记录原因（v70 前），常见原因见 指标说明.md「十」。</div></div>';
 
     var html = '<button type="button" class="cmpl-toggle" aria-expanded="false" title="点击展开/收起">' +
@@ -1951,7 +1972,7 @@
   // Receive every point immediately; schedule chart work independently.
   function createLiveBuffer(onRender, options) {
     options = options || {};
-    var limit = options.limit || 300;
+    var limit = options.limit || 600;
     var delay = options.delay == null ? 500 : options.delay;
     var schedule = options.schedule || setTimeout;
     var cancel = options.cancel || clearTimeout;

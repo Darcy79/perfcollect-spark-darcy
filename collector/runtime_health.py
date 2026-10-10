@@ -2,6 +2,7 @@
 """采集运行期健康状态：通道缺失、断连连续计数与实时数据自检。"""
 
 from data_health import check_rows_live
+from metric_state import metric_is_paused
 
 
 # 连续失败达到 3 轮才请求主调用方执行 ADB 探活。
@@ -24,7 +25,7 @@ def row_has_any_value(row):
         value = row.get(key)
         if not isinstance(value, dict):
             continue
-        if value.get("error"):
+        if value.get("error") or metric_is_paused(key, value):
             return True
         for field in (
             "fps", "cpu_total_pct", "cpu_proc_pct", "pss_kb", "vmrss_kb",
@@ -45,32 +46,34 @@ class ChannelAlertTracker:
         self._in_disconnect = False
         self._in_missing = False
 
-    def update(self, err_codes):
+    def update(self, err_codes, active_count=5):
         events = []
         count = len(err_codes)
+        disconnect_count = max(1, active_count - 1)
+        missing_count = min(self.MISSING_ERR_COUNT, disconnect_count)
         distribution = {}
         for code in err_codes:
             distribution[code] = distribution.get(code, 0) + 1
-        if (self.MISSING_ERR_COUNT <= count < self.DISCONNECT_ERR_COUNT
+        if (missing_count <= count < disconnect_count
                 and not self._in_missing):
             self._in_missing = True
             events.append({
                 "event": "channel_alert", "kind": "missing_metric",
                 "detail": {"err_count": count, "err_codes": distribution},
             })
-        elif count < self.MISSING_ERR_COUNT and self._in_missing:
+        elif count < missing_count and self._in_missing:
             self._in_missing = False
             events.append({
                 "event": "channel_alert", "kind": "recovered",
                 "detail": {"err_count": count, "scope": "missing"},
             })
-        if count >= self.DISCONNECT_ERR_COUNT and not self._in_disconnect:
+        if count >= disconnect_count and not self._in_disconnect:
             self._in_disconnect = True
             events.append({
                 "event": "channel_alert", "kind": "disconnect",
                 "detail": {"err_count": count, "err_codes": distribution},
             })
-        elif count < self.DISCONNECT_ERR_COUNT and self._in_disconnect:
+        elif count < disconnect_count and self._in_disconnect:
             self._in_disconnect = False
             events.append({
                 "event": "channel_alert", "kind": "recovered",
@@ -88,7 +91,6 @@ class RuntimeHealthTracker:
 
     def __init__(self, metric_keys, health_check=check_rows_live):
         self._metric_keys = tuple(metric_keys)
-        self._disconnect_error_count = max(0, len(self._metric_keys) - 1)
         self._channel_alerts = ChannelAlertTracker()
         self._health_check = health_check
         self._health_streak = {}
@@ -100,16 +102,19 @@ class RuntimeHealthTracker:
         return self._fail_streak
 
     def update(self, row):
+        paused = [key for key in self._metric_keys
+                  if metric_is_paused(key, row.get(key))]
+        active = [key for key in self._metric_keys if key not in paused]
         err_codes = [
             row[key].get("error")
-            for key in self._metric_keys
+            for key in active
             if isinstance(row.get(key), dict) and row[key].get("error")
         ]
-        channel_events = self._channel_alerts.update(err_codes)
+        channel_events = self._channel_alerts.update(err_codes, len(active))
 
         probe_required = False
         recovered = False
-        if len(err_codes) >= self._disconnect_error_count:
+        if active and len(err_codes) >= max(1, len(active) - 1):
             self._fail_streak += 1
             if (self._fail_streak >= FAIL_ALERT_STREAK
                     and not self._diagnostic_active):
@@ -124,6 +129,7 @@ class RuntimeHealthTracker:
         health_alerts, self._health_streak = self._health_check(
             row, self._health_streak)
         return {
+            "paused_metrics": paused,
             "err_codes": err_codes,
             "channel_events": channel_events,
             "fail_streak": self._fail_streak,

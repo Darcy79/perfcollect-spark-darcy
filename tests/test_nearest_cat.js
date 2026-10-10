@@ -535,6 +535,25 @@ if (typeof computeCompleteness !== 'function') {
      '长报告悬停：tooltip 不做跨图位置过渡');
   eq(fpsOption.tooltip.axisPointer.animation, false,
      '长报告悬停：联动白线不做延迟动画');
+  for (const chart of Object.values(charts)) {
+    const opt = chart.options.find(o => o.series);
+    eq(opt.series.every(line => line.connectNulls === false), true, '所有指标缺数断线');
+  }
+  const gapRows = [0, 1, 2].map(i => ({ ...rows[0], t_ms: i * 500,
+    fps: i === 1 ? { status: 'paused' } : rows[0].fps }));
+  charts.frametime.options = [];
+  window.PerfCharts.renderAll(charts, gapRows, { zoom: true });
+  eq(charts.frametime.options[0].series[0].data[1] == null, true, '暂停帧时间不填值');
+  eq(charts.frametime.options[0].series[0].data[2], 16.7, '恢复后保留真实帧时间');
+  const longRows = Array.from({ length: 6001 }, (_, i) => ({ ...rows[0], t_ms: i * 500 }));
+  longRows[1] = { ...longRows[1], fps: { status: 'paused' } };
+  charts.frametime.options = [];
+  window.PerfCharts.renderAll(charts, longRows, { zoom: true });
+  const thinned = charts.frametime.options[0].series[0].data;
+  eq(thinned.length <= 3000, true, '长报告仍限制显示点数');
+  eq(thinned[1], null, '抽稀跨过的单点缺数仍断线');
+  eq(thinned[2], 16.7, '抽稀断线后恢复数据');
+  eq(longRows[2].fps.frame_p50_ms, 16.7, '显示断线不修改原始指标');
   globalThis.document = oldDocument;
 }
 
@@ -664,6 +683,33 @@ const actionChecks = [];
   }
   eq(series([{ ...a, t_ms: null }], 'cpu_proc_pct')[0][1], null, '无时间基准不伪造时间');
   eq(a.t_ms, 250.25, '诊断不修改输入');
+}
+
+// Default real-time ring preserves about five minutes at two reports/second.
+{
+  const buffer = window.PerfCharts.createLiveBuffer(() => {}, {
+    delay: 0, schedule: () => 1, cancel: () => {},
+  });
+  buffer.accept(Array.from({ length: 601 }, (_, i) => ({ _seq: i, t_ms: i * 500 })));
+  eq(buffer.snapshot().length, 600, '2Hz默认窗口保留600点');
+  eq(buffer.snapshot()[0].t_ms, 500, '默认窗口只淘汰最旧点');
+  eq(buffer.snapshot()[599].t_ms, 300000, '默认窗口保留最新点');
+}
+
+{
+  for (const legacy of [false, true]) {
+    const row = { t_ms: 500 };
+    for (const key of ['fps', 'cpu', 'mem', 'net', 'therm'])
+      row[key] = legacy ? { error: 'experiment_' + key + '_disabled' } : { status: 'paused' };
+    const comp = window.PerfCharts.computeCompleteness([row]);
+    eq(Object.values(comp.metrics).every(m => m.reasons.paused === 1), true,
+       '新旧暂停状态在所有完整度指标单独注明');
+    eq(window.PerfCharts._reasonText('paused').includes('主动暂停采集'), true,
+       'FPS统计栏区分主动暂停');
+  }
+  const comp = window.PerfCharts.computeCompleteness([{ t_ms: 500,
+    fps: { status: 'paused', error: 'read_fail' } }]);
+  eq(comp.metrics.fps.reasons.read_fail, 1, '暂停状态不掩盖真实错误码');
 }
 
 Promise.all(actionChecks).then(() => {

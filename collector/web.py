@@ -9,7 +9,7 @@ web.add_sample(row)，页面通过轮询 /api/latest 实时刷新。
     GET /report.html         历史报告页
     GET /assets/*            静态文件（echarts.min.js / app.js / report.js / style.css）
     GET /api/status          采集状态 {running, device, pid, run_id, outdir, ...}
-    GET /api/latest          最近采样点（环形缓冲，最多 300 点）
+    GET /api/latest          最近采样点（环形缓冲，最多 600 点）
     GET /api/runs            output 目录历史 jsonl 列表（行数按 mtime/size 缓存）
     GET /api/report?name=xx  指定历史报告完整数据（JSON 数组，按 mtime 缓存）
     GET /api/zip?name=xx     下载单份报告的同主干产物 ZIP
@@ -50,7 +50,7 @@ from report_view import enhance_served_report
 from sample_diagnostics import load_diagnostics
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "web")
-RING_SIZE = 300  # 实时看板保留最近 300 个采样点
+RING_SIZE = 600  # 默认2Hz报告保留约5分钟；只影响实时缓存
 # 已装应用 label 缓存（避免每次下拉都逐包 aapt 解析）：按设备序列号分 key
 APP_LABEL_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".app_labels.json")
 _REPORT_STAMP = re.compile(r"(?:^|_)(\d{8}_\d{6})\.jsonl$")
@@ -830,7 +830,7 @@ class WebServer:
                     while True:
                         with server._lock:
                             latest = list(server.latest)
-                        # 用 _seq 游标推增量：实时缓冲满 300 裁剪后 count 恒为 300，
+                        # 用 _seq 游标推增量：实时缓冲满 RING_SIZE 裁剪后 count 恒为 RING_SIZE，
                         # 按 count 判断会永久停发（2026-08-21 实时看板 299s 冻结修复）
                         new = [r for r in latest if r.get("_seq", 0) > last_seq]
                         if new:

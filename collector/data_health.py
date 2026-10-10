@@ -14,6 +14,9 @@
       output/20260824_084252                   → 同样采错进程（应检出，验证规则泛化）
 """
 
+from metric_state import metric_is_paused
+
+
 # ---------------- 阈值常量（集中管理，便于调参） ----------------
 # 采错进程：渲染中（fps 中位 ≥ 阈值）但进程 CPU 几乎为 0 的样本占比超过此值
 WRONG_PROC_MIN_FPS = 30.0      # fps 中位数下限：低于它可能真的不渲染，不算"采错"
@@ -202,8 +205,9 @@ def scan_rows(rows):
     for metric, getter in KEY_METRICS.items():
         run = 0
         run_start = None
+        metric_key = {"cpu_proc": "cpu", "pss": "mem", "temp": "therm"}.get(metric, metric)
         for r in data:
-            if getter(r) is None:
+            if getter(r) is None and not metric_is_paused(metric_key, r.get(metric_key)):
                 if run == 0:
                     run_start = r.get("t_ms")
                 run += 1
