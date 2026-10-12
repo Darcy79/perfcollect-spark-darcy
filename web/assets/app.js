@@ -847,6 +847,7 @@
 
   // v47：设备信息结构化 → 行数组 [{label, value}, ...]，历史看板 meta 区**分行分字段**显示。
   //   - 设备行：市场名优先（无市场名用型号代码）；型号代码与市场名不同则附 " (型号代码)"
+  //   - 系统行：system_version（缺失则省略，不根据当前设备补旧报告）
   //   - 芯片行：cpu_hardware · cpu_max_freq_mhz(MHz) · N 核 —— 缺哪个跳哪个；
   //     核数仅随芯片信息出现（避免无芯片信息时孤零零一行"8 核"）
   //   - 分辨率行：screen_resolution
@@ -863,6 +864,7 @@
       if (code && String(code) !== text) text += ' (' + code + ')';
       lines.push({ label: '设备', value: text });
     }
+    if (device.system_version) lines.push({ label: '系统', value: device.system_version });
     // ② 芯片行（硬件型号 / 主频先组，核数仅在有芯片信息时追加）
     var chip = [];
     if (device.cpu_hardware) chip.push(device.cpu_hardware);
@@ -948,7 +950,7 @@
     fps: '#4fc3f7', jank: '#ff8a65',
     p50: '#80deea', p95: '#ffab40', max: '#ef5350',
     cpu_total: '#81c784', cpu_proc: '#ffd54f', cpu_proc_of_total: '#b39ddb',
-    pss: '#ba68c8', rss: '#90a4ae',
+    pss: '#ba68c8', rss: '#ffca28',
     rx: '#4dd0e1', tx: '#f06292',
     temp: '#ff7043', power: '#aed581',
   };
@@ -1165,7 +1167,7 @@
                min: 0, axisLabel: { fontSize: 10 } },
       series: [
         Object.assign({}, baseLine, { name: 'PSS MB', data: pss, color: COLORS.pss, lineStyle: { width: 1.6, color: COLORS.pss } }),
-        Object.assign({}, baseLine, { name: 'RSS MB', data: rss, color: COLORS.rss, lineStyle: { width: 1.2, color: COLORS.rss } }),
+        Object.assign({}, baseLine, { name: 'RSS MB', data: rss, color: COLORS.rss, lineStyle: { width: 2.2, color: COLORS.rss } }),
       ],
     });
   }

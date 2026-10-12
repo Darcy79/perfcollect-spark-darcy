@@ -21,7 +21,7 @@ class TestParseDeviceInfo(unittest.TestCase):
         # 模拟荣耀 Magic3 Pro 实测输出
         out = (
             "ADT-AN00\n__PDDEV__\n\n__PDDEV__\nADT-AN00\n__PDDEV__\nlahaina\n__PDDEV__\n"
-            "Hardware\t: SM8350\n__PDDEV__\nPhysical size: 1080x2388\n__PDDEV__\n1804800"
+            "Hardware\t: SM8350\n__PDDEV__\nPhysical size: 1080x2388\n__PDDEV__\n1804800\n__PDDEV__\n14"
         )
         d = parse_device_info(out)
         self.assertEqual(d["model"], "ADT-AN00")
@@ -30,6 +30,7 @@ class TestParseDeviceInfo(unittest.TestCase):
         self.assertEqual(d["cpu_hardware"], "SM8350")
         self.assertEqual(d["screen_resolution"], "1080×2388")
         self.assertEqual(d["cpu_max_freq_mhz"], "1804.8")
+        self.assertEqual(d["system_version"], "Android 14")
 
     def test_marketname_preferred_over_map(self):
         out = (
@@ -45,12 +46,14 @@ class TestParseDeviceInfo(unittest.TestCase):
         self.assertIsNone(d["market_name"])
         self.assertIsNone(d["screen_resolution"])
         self.assertIsNone(d["cpu_max_freq_mhz"])
+        self.assertIsNone(d["system_version"])
 
     def test_short_output_padded(self):
         # 只有 model，其余段缺失 → 不应崩，后面字段 None
         d = parse_device_info("ADT-AN00")
         self.assertEqual(d["model"], "ADT-AN00")
         self.assertIsNone(d["cpu_max_freq_mhz"])
+        self.assertIsNone(d["system_version"])
 
 
 class TestHelpers(unittest.TestCase):

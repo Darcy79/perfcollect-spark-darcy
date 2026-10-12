@@ -8,15 +8,23 @@
 
 ---
 
-## 当前状态（2026-10-10，v124）
+## 当前状态（2026-10-10，v125）
 
 | 项 | 值 |
 |---|---|
-| 前端资源版本 | **v92**（`web/index.html` 3 处、`web/report.html` 5 处 `?v=`） |
-| 测试 | Python **424** 条 + JS **237** 断言（全绿） |
+| 前端资源版本 | **v93**（`web/index.html` 3 处、`web/report.html` 5 处 `?v=`） |
+| 测试 | Python **424** 条 + JS **240** 断言（全绿） |
 | 分发方式 | **zip**（`make_zip.bat` / `tools/make_zip.py` → `share/perfcollect-cn-<版本>-<日期>.zip`）——**已无 exe / 安装包** |
 | 采集环境 | Windows + adb 真机（荣耀 ADT-AN00 Magic3 Pro / OPPO；详见 `devices.md`） |
 | 工具链 | `uv`（Python）+ `bun`（JS 测试）+ `adb` |
+
+---
+
+## v125（2026-10-10 · Codex）—— 看板显示Android版本与增强RSS曲线
+
+- 启动时现有一次设备信息查询追加Android release，保存为system_version；实时状态栏、历史看板及新导出HTML展示系统版本。旧报告没有该字段时不推断、不补写，采样频率及指标口径不变。
+- 共享RSS曲线由灰蓝色1.2px改为亮琥珀色2.2px，实时/历史及新导出报告同步，PSS保持紫色；数值与坐标尺度不变。已导出自包含HTML保留原样式。
+- 设备解析回归补充版本字段与旧输出兼容，JS新增3项系统信息断言；Python424、JS240、前端资源v93。
 
 ---
 

@@ -54,7 +54,7 @@ CSV 和 HTML 继续使用原有统计口径。历史看板不会将旁车列成�
 停止记录中的 `unfinished_workers` 非空表示有查询未在停止等待预算内完成。
 分析程序可用 `collector/sample_recording.py` 的 `iter_samples()` 逐条读取。
 
-当前回归基线：Python 424 项、JS 237 断言，前端资源 v92。
+当前回归基线：Python 424 项、JS 240 断言，前端资源 v93。
 
 FPS保持2Hz SurfaceFlinger查询，默认优先使用内置C FPS设备探针；设备不支持、部署失败或流异常时自动回退优化后的专用ADB shell，长连接协议标记使用内置echo；长连接异常再回退逐次查询。`--fps-query-mode persistent`可强制使用长连接，`--fps-query-mode oneshot`可使用原查询方式。CPU默认C探针4Hz，主报告和实时绘图默认约2Hz。
 

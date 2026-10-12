@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PerfCollect 自研工具 · 实时看板</title>
-<link rel="stylesheet" href="/assets/style.css?v=92">
+<link rel="stylesheet" href="/assets/style.css?v=93">
 </head>
 <body>
 <header>
@@ -18,6 +18,7 @@
   </div>
   <div id="status-bar">
     <span id="st-device">设备: -</span>
+    <span id="st-system">系统: -</span>
     <span id="st-pid">进程: -</span>
     <span id="st-run">本次: -</span>
     <span id="st-outdir" title="本次采集数据保存目录">数据: -</span>
@@ -100,8 +101,8 @@
   <span>自研 PerfCollect · 数据仅存本地（output/*.jsonl）· <a href="/report.html">历史报告 →</a></span>
 </footer>
 
-<script src="/assets/echarts.min.js?v=92"></script>
-<script src="/assets/app.js?v=92"></script>
+<script src="/assets/echarts.min.js?v=93"></script>
+<script src="/assets/app.js?v=93"></script>
 <script>
 (function () {
   var charts = { fps: null, frametime: null, cpu: null, mem: null, net: null, temp: null };
@@ -449,6 +450,8 @@
         if (mn) devName = mn + (s.device_info.model && s.device_info.model !== mn ? ' (' + s.device_info.model + ')' : '');
       }
       document.getElementById('st-device').textContent = '设备: ' + devName;
+      document.getElementById('st-system').textContent = '系统: ' +
+        (s.device_info && s.device_info.system_version || '未获取');
       document.getElementById('st-pid').textContent = '进程: ' + (s.pid || '-');
       document.getElementById('st-run').textContent = '本次: ' + (s.run_id || '-');
       if (s.run_id) lastRunId = s.run_id;   // v48（UI优化 4.4）：记住本次 run，供停止后直达链接

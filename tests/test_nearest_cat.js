@@ -173,6 +173,13 @@ if (typeof deviceInfoLines !== 'function') {
   process.exit(1);
 }
 {
+  const dev = { model: 'ADT-AN00', system_version: 'Android 14' };
+  const lines = deviceInfoLines(dev, 8);
+  eq(lines.length, 2, 'deviceInfoLines：设备+系统两行');
+  eq(lines[1].label, '系统', 'deviceInfoLines：系统标签');
+  eq(formatDeviceInfo(dev, 8), 'ADT-AN00 · Android 14', 'formatDeviceInfo：保留系统版本');
+}
+{
   // 全字段：设备(市场名+型号) / 芯片(硬件·主频·核数) / 分辨率 三行，顺序固定
   const dev = { model: 'ADT-AN00', market_name: 'Magic3 Pro', cpu_hardware: 'SM8350', cpu_max_freq_mhz: '1804.8', screen_resolution: '1080×2388' };
   const lines = deviceInfoLines(dev, 8);

@@ -96,11 +96,11 @@ def _parse_hardware(raw):
 def parse_device_info(out):
     """解析 probe_device_info 的合并 shell 输出（标记分隔），返回 device dict。
 
-    各段顺序：model / marketname / name / board / hardware / wm_size / cpu_freq。
+    各段顺序：model / marketname / name / board / hardware / wm_size / cpu_freq / android_release。
     字段缺失/解析失败置 None。
     """
     seg = (out or "").split("__PDDEV__")
-    seg = seg if len(seg) >= 7 else seg + [""] * (7 - len(seg))
+    seg = seg if len(seg) >= 8 else seg + [""] * (8 - len(seg))
 
     def _s(i):
         return seg[i].strip() or None
@@ -121,13 +121,14 @@ def parse_device_info(out):
         "cpu_hardware": hardware,           # SM8350 等
         "cpu_max_freq_mhz": cpu_freq_mhz,
         "screen_resolution": resolution,
+        "system_version": "Android " + _s(7) if _s(7) else None,
     }
 
 
 def probe_device_info(adb):
     """一次 shell 往返拿全设备信息；任何失败静默返回全 None dict。
 
-    合并命令（`adb shell sh -c '...'`）一次往返取：getprop 四项 + wm size +
+    合并命令（`adb shell sh -c '...'`）一次往返取：getprop 五项 + wm size +
     cpuinfo_max_freq，避免多次 adb 往返拖慢启动。
     """
     cmd = (
@@ -137,7 +138,8 @@ def probe_device_info(adb):
         "getprop ro.board.platform; echo __PDDEV__; "
         "cat /proc/cpuinfo | grep -i hardware | head -1; echo __PDDEV__; "
         "wm size; echo __PDDEV__; "
-        "cat /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq"
+        "cat /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq; echo __PDDEV__; "
+        "getprop ro.build.version.release"
     )
     try:
         out = adb.shell(["sh", "-c", cmd])
@@ -146,5 +148,5 @@ def probe_device_info(adb):
         return {
             "model": None, "model_code": None, "market_name": None,
             "board_platform": None, "cpu_hardware": None,
-            "cpu_max_freq_mhz": None, "screen_resolution": None,
+            "cpu_max_freq_mhz": None, "screen_resolution": None, "system_version": None,
         }
