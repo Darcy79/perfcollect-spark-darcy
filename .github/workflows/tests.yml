@@ -32,8 +32,9 @@ jobs:
         run: |
           python -m py_compile `
             collector\main.py collector\web.py collector\adb.py `
+            collector\adb_connection.py collector\wireless.py collector\workspace.py `
             collector\pidresolver.py collector\probe.py collector\apk_label.py `
-            collector\logcat.py collector\export_report.py collector\dashboard.py `
+            collector\logcat.py collector\export_report.py `
             collector\data_health.py collector\sampling.py collector\target_context.py `
             collector\target_monitor.py collector\target_switcher.py `
             collector\jsonl_writer.py collector\runtime_health.py `

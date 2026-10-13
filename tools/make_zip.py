@@ -37,7 +37,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # 打进分发包的顶层目录 / 文件（相对项目根）
 INCLUDE_DIRS = ["collector", "web", "sdk", "tests"]
 INCLUDE_FILES = [
-    "start_perfcollect.bat", "start_dashboard.bat",
+    "start_perfcollect.bat",
     "README.md", "使用教程-保姆级.md", "指标说明.md", "devices.md",
 ]
 # 进包时改名（源文件 → 包内路径）
@@ -126,16 +126,17 @@ def version_txt(version, n_files):
         "怎么跑起来（3 步）\n"
         "------------------\n"
         "1) 解压到任意路径（建议英文路径，如 D:\\perfcollect）\n"
-        "2) 双击 start_perfcollect.bat   —— 采集 + 实时看板（需要 uv 或 Python）\n"
-        "   只想看历史报告：双击 start_dashboard.bat（不需要连手机）\n"
-        "3) 浏览器会自动打开 http://localhost:8080\n"
+        "2) 双击 start_perfcollect.bat   —— 统一工作台（需要 uv 或 Python）\n"
+        "   无线采集：同一实时看板插线识别后点“一键转无线”，验证成功再拔线\n"
+        "   只想看历史报告：在准备页点“查看历史报告”，不需要连手机\n"
+        "3) 浏览器会自动打开实际地址；默认8080，占用时自动换端口\n"
         "\n"
         "环境要求\n"
         "--------\n"
         "- uv（推荐，会自动准备 Python）：pip install uv   或 https://docs.astral.sh/uv/\n"
         "  没有 uv 也可直接用系统 Python：python collector/main.py --web\n"
         "- 仅「导出 XLSX」需要 openpyxl（启动脚本已带 --with openpyxl 自动获取）\n"
-        "- 采集需要手机开启 USB 调试，并建议把 adb 放到 C:\\platform-tools\\\n"
+        "- 采集需要USB调试或Android11+无线调试，建议把adb放到 C:\\platform-tools\\\n"
         "\n"
         "数据位置\n"
         "--------\n"

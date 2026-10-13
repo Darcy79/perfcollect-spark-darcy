@@ -443,6 +443,8 @@
              text: groups.map(function (g) { return g.text; }).join(' · ') };
   }
   function _pinShowData(idx, localX) {
+    // 历史页在顶部统一展示锁定快照；实时页继续使用原图内数据提示。
+    if (document.getElementById('pin-snapshot')) return;
     var row = _pinRows[_pinFullIdx(idx)];   // v58：显示索引 → 全量行
     if (!row) return;
     _pinCharts.forEach(function (c) {
@@ -865,6 +867,10 @@
       lines.push({ label: '设备', value: text });
     }
     if (device.system_version) lines.push({ label: '系统', value: device.system_version });
+    if (device.connection && device.connection.label) {
+      lines.push({ label: '连接', value: device.connection.label });
+      if (device.connection.network_note) lines.push({ label: '网络口径', value: device.connection.network_note });
+    }
     // ② 芯片行（硬件型号 / 主频先组，核数仅在有芯片信息时追加）
     var chip = [];
     if (device.cpu_hardware) chip.push(device.cpu_hardware);
@@ -973,7 +979,7 @@
       // 绘图区尽量占满：left 给 Y 轴数字+单位，right 保持紧凑
       // bottom 在有时间滑动条时让出空间给 slider
       grid: { left: GRID_PAD.left, right: GRID_PAD.right, top: 34, bottom: 28 },
-      tooltip: { trigger: 'axis', confine: true,
+      tooltip: { trigger: 'axis', confine: true, className: 'perf-axis-tooltip',
         // 跨图联动时立即跟随指针，避免上一个位置的 CSS 过渡与
         // 新一轮 showTip/hideTip 重叠产生视觉抖动。
         transitionDuration: 0,

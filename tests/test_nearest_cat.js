@@ -173,6 +173,13 @@ if (typeof deviceInfoLines !== 'function') {
   process.exit(1);
 }
 {
+  const lines = deviceInfoLines({ model: 'Phone', connection: { label: '无线ADB', network_note: '网络含ADB通信' } }, 8);
+  eq(lines.length, 3, 'deviceInfoLines：无线连接与流量口径');
+  eq(lines[1].value, '无线ADB', 'deviceInfoLines：保留采集时连接方式');
+  eq(lines[2].label, '网络口径', 'deviceInfoLines：显示无线流量影响');
+  eq(deviceInfoLines({ model: 'Phone', connection: { label: 'USB' } }, 8).length, 2, 'deviceInfoLines：USB不显示无线提示');
+}
+{
   const dev = { model: 'ADT-AN00', system_version: 'Android 14' };
   const lines = deviceInfoLines(dev, 8);
   eq(lines.length, 2, 'deviceInfoLines：设备+系统两行');
@@ -717,6 +724,189 @@ const actionChecks = [];
   const comp = window.PerfCharts.computeCompleteness([{ t_ms: 500,
     fps: { status: 'paused', error: 'read_fail' } }]);
   eq(comp.metrics.fps.reasons.read_fail, 1, '暂停状态不掩盖真实错误码');
+}
+
+// Preparation controls: protect connection routing and manual process selection.
+{
+  const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  function element(tag = 'div') {
+    return { tagName: tag.toUpperCase(), children: [], hidden: false, disabled: false,
+      attributes: {}, classList: { add() {}, toggle() {} },
+      appendChild(child) { this.children.push(child); },
+      removeChild(child) { this.children.splice(this.children.indexOf(child), 1); },
+      setAttribute(key, value) { this.attributes[key] = value; },
+      get firstChild() { return this.children[0]; } };
+  }
+  function dom() {
+    const nodes = {};
+    return { nodes, getElementById(id) { return nodes[id] ||= element(); }, createElement: element };
+  }
+  const wizardCode = source.slice(source.indexOf('  function renderWizard('), source.indexOf('  function loadCandidates('));
+  const render = new Function('document', 'selected', 'data', `
+    var wzSel = selected, wzData, currentTarget = null, workspacePhase = 'waiting';
+    var startPending = false, targetPending = false, candidatePending = false;
+    function wzEl(id) { return document.getElementById(id); }
+    ${wizardCode}
+    renderWizard(data);
+    return wzSel;
+  `);
+  const candidates = [{pid:101, recommended:true}, {pid:202}];
+  let d = dom();
+  eq(render(d, 202, {ok:true,candidates}), 202, '重新探测保留有效手选进程');
+  eq(d.nodes['wz-list'].children[1].children[0].checked, true, '手选进程的单选框保持勾选');
+  d = dom();
+  eq(render(d, null, {ok:true,candidates}), 101, '首次探测仍选择推荐进程');
+  d = dom(); render(d, null, {ok:true,candidates:[]});
+  eq(d.nodes['wz-start'].disabled, true, '没有进程时不能开始');
+  d = dom(); render(d, null, {ok:false,error:'设备已离线'});
+  eq(d.nodes['wz-start'].disabled, true, '探测失败时不能开始');
+
+  const connectionCode = source.slice(source.indexOf('  function selectedPreparationDevice('), source.indexOf("  wzEl('cp-mode-usb').onclick"));
+  const connect = new Function('document', 'device', 'mode', 'pending', `
+    var preparationDevices = device ? [device] : [], connectionMode = mode;
+    var preparationAvailable = true, preparationBusy = false, preparePending = pending;
+    function wzEl(id) { return document.getElementById(id); }
+    function selectedPreparationGroup() { return null; }
+    function syncSelects() {}
+    ${connectionCode}
+    renderConnectionChoices();
+  `);
+  function connection(transport, mode, pending = false) {
+    const d = dom(); d.getElementById('cp-device').value = 'A';
+    connect(d, transport ? {serial:'A',transport,state:'device'} : null, mode, pending);
+    return d.nodes;
+  }
+  let nodes = connection('usb','usb');
+  eq(nodes['cp-usb'].disabled, false, 'USB可直接继续');
+  eq(nodes['cp-wifi'].hidden, true, 'USB未选择无线时隐藏准备动作');
+  nodes = connection('usb','wifi');
+  eq(nodes['cp-wifi'].hidden, false, 'USB选择无线后提供准备动作');
+  eq(nodes['cp-usb'].hidden, true, '无线准备不会误走USB继续按钮');
+  nodes = connection('wifi','wifi');
+  eq(nodes['cp-wifi'].hidden, true, '已有无线连接不再显示转无线');
+  eq(nodes['cp-usb'].disabled, false, '已有无线可直接继续');
+  nodes = connection('unknown','unknown');
+  eq(nodes['cp-usb'].disabled, false, '未知ADB连接仍可继续');
+  eq(nodes['cp-mode-wifi'].disabled, true, '未知连接不能执行USB引导无线');
+  eq(connection('usb','wifi',true)['cp-wifi'].disabled, true, '无线准备中禁止重复提交');
+  eq(connection(null,'')['cp-usb'].disabled, true, '无设备时禁止继续');
+
+  const groupCode = source.slice(source.indexOf('  function groupPreparationDevices('),source.indexOf('  function selectedPreparationGroup('));
+  const group = new Function('devices', `${groupCode}; return groupPreparationDevices(devices);`);
+  const usb = {serial:'USB-A',transport:'usb',state:'device',model:'same',identity:'physical-A'};
+  const wifi = {serial:'192.168.1.2:5555',transport:'wifi',state:'device',model:'same',identity:'physical-A'};
+  eq(group([usb,wifi]).length,1,'确认同身份的有线无线合并为一个设备');
+  eq(group([usb,{...wifi,identity:'physical-B'}]).length,2,'同型号不同身份不合并');
+  eq(group([{...usb,identity:''},{...wifi,identity:''}]).length,2,'没有身份依据时不猜测合并');
+  eq(group([usb,{...usb,serial:'USB-B'}]).length,2,'重复USB身份歧义时保持独立');
+  const selectGroupCode = source.slice(source.indexOf('  function selectedPreparationGroup('),source.indexOf('  var workspaceSizeAnimation'));
+  const selectDeviceCode = source.slice(source.indexOf('  function selectedPreparationDevice('),source.indexOf('  function renderConnectionChoices('));
+  const route = new Function('groups','mode', `
+    var preparationGroups=groups, preparationDevices=[], connectionMode=mode;
+    function wzEl() { return {value:groups[0].key}; }
+    ${selectGroupCode}
+    ${selectDeviceCode}
+    return selectedPreparationDevice().serial;
+  `);
+  eq(route(group([usb,wifi]),'usb'),'USB-A','合并设备选择有线时仍路由到USB序列号');
+  eq(route(group([usb,wifi]),'wifi'),'192.168.1.2:5555','合并设备选择无线时路由到无线地址');
+
+  const candidateCode = source.slice(source.indexOf('  function loadCandidates('), source.indexOf('  function startCapture('));
+  const asyncCandidates = new Function('document', `
+    var candidateRequest = 0, candidatePending = false, workspacePhase = 'waiting', wzSel = null, wzData;
+    var pending = [], rendered = [];
+    function wzEl(id) { return document.getElementById(id); }
+    function syncStartButton() {}
+    function renderWizard(data) { rendered.push(data.target); }
+    function fetch() { return new Promise(function(resolve) { pending.push(resolve); }); }
+    ${candidateCode}
+    return {load:loadCandidates, rendered:rendered,
+      reply:function(i, data) { pending[i]({json:function() { return data; }}); },
+      leave:function() { workspacePhase = 'running'; candidateRequest++; }};
+  `);
+  actionChecks.push((async () => {
+    const harness = asyncCandidates(dom());
+    harness.load(false); harness.load(true);
+    harness.reply(1, {ok:true,target:'new',candidates:[]});
+    await new Promise(resolve => setTimeout(resolve, 0));
+    harness.reply(0, {ok:true,target:'old',candidates:[]});
+    await new Promise(resolve => setTimeout(resolve, 0));
+    eq(harness.rendered.join(','), 'new', '晚到的旧探测结果不覆盖新结果');
+    harness.load(false); harness.leave();
+    harness.reply(2, {ok:true,target:'after-start',candidates:[]});
+    await new Promise(resolve => setTimeout(resolve, 0));
+    eq(harness.rendered.join(','), 'new', '进入采集后不再应用准备期探测结果');
+  })());
+}
+
+// 快照显隐必须同步维持正在阅读的图表位置，不能留下延迟回调重新展开。
+{
+  const source = require('fs').readFileSync(require('path').join(__dirname, '../web/assets/report.js'), 'utf8').replace(/\r\n/g,'\n');
+  const begin = source.indexOf('  (function () {\n    var body = document.getElementById(\'report-body\');');
+  const hookCode = source.slice(begin, source.indexOf('  // v97：Label', begin));
+  const classes = new Set(); let scroll = 0, snapH = '';
+  const bar = {classList:{add:c=>classes.add(c),remove:c=>classes.delete(c),contains:c=>classes.has(c)},appendChild(){},textContent:'',offsetHeight:150};
+  const chart = {getBoundingClientRect:()=>({top:250+(classes.has('show')?160:0)-scroll,bottom:470+(classes.has('show')?160:0)-scroll,height:220})};
+  let hook;
+  const win = {innerHeight:900,scrollBy:({top})=>{scroll+=top;},PerfCharts:{setPinHook:fn=>{hook=fn;}}};
+  const doc = {getElementById:id=>id==='report-body'?{classList:{toggle(){}},style:{setProperty:(_,v)=>{snapH=v;}}}:bar,querySelectorAll:()=>[chart],createElement:()=>({appendChild(){}})};
+  new Function('window','document',hookCode)(win,doc);
+  hook({t:'1.0',groups:[{name:'FPS',text:'60'}]});
+  eq(chart.getBoundingClientRect().top,250,'锁定时保持图表视口位置');
+  eq(snapH,'160px','快照吸顶偏移同步包含下边距');
+  hook(null);
+  eq(chart.getBoundingClientRect().top,250,'取消锁定时保持图表视口位置');
+  eq(snapH,'0px','取消锁定立即清除吸顶偏移');
+  eq(classes.has('show'),false,'取消锁定立即收起快照');
+  hook({t:'2.0',groups:[]}); hook(null);
+  eq(scroll,0,'快速锁定取消不积累滚动偏移');
+  const animations = [], ghosts = [];
+  function animate() { const a={cancelled:false,cancel(){this.cancelled=true;}};animations.push(a);return a; }
+  bar.animate = animate;
+  bar.getBoundingClientRect = ()=>({top:0,left:300,width:900});
+  bar.cloneNode = ()=>({removeAttribute(){},setAttribute(){},style:{},animate,remove(){this.removed=true;}});
+  doc.body = {appendChild:node=>ghosts.push(node)};
+  win.matchMedia = ()=>({matches:false});
+  hook({t:'3.0',groups:[]});
+  eq(classes.has('show'),true,'进入动效无需结束即可完成锁定状态更新');
+  hook(null);
+  eq(classes.has('show'),false,'离场动效不延迟真实解锁');
+  eq(ghosts.length,1,'离场仅保留一个不占布局的视觉副本');
+  const exit = animations[1];
+  hook({t:'4.0',groups:[]});
+  eq(ghosts[0].removed && exit.cancelled,true,'快速重锁会清理旧离场动画与副本');
+  exit.onfinish();
+  eq(classes.has('show'),true,'旧离场结束不能隐藏新锁定信息框');
+}
+
+// 自绘选择器保留设备字符定位及搜索输入框的原生光标操作。
+{
+  const source = fs.readFileSync(path.join(__dirname,'../web/index.html'),'utf8');
+  const begin = source.indexOf('    function keydown(e) {');
+  const code = source.slice(begin,source.indexOf('    button.onkeydown = keydown;',begin));
+  const make = new Function('searchMode', `
+    var button={}, search={hidden:!searchMode}, open=false, active=0, shown=[], typedPrefix='', typedAt=0;
+    var select={options:[{textContent:'Alpha'},{textContent:'Beta'},{textContent:'Bravo'},{textContent:'Blocked',disabled:true}],selectedIndex:0};
+    function close(){open=false;} function show(){open=true;shown=select.options;}
+    function mark(i){active=i;} function choose(o){select.selectedIndex=select.options.indexOf(o);}
+    ${code}
+    return {key:function(key,extra){var e=Object.assign({key:key,target:searchMode?search:button,preventDefault:function(){this.prevented=true;}},extra||{});keydown(e);return !!e.prevented;},
+      selected:function(){return select.options[select.selectedIndex].textContent;},isOpen:function(){return open;}};
+  `);
+  const search = make(true);
+  eq(search.key('Home'),false,'应用搜索Home保留原生光标操作');
+  eq(search.key('End'),false,'应用搜索End保留原生光标操作');
+  search.key('ArrowDown',{altKey:true});
+  eq(search.isOpen(),true,'Alt下方向键展开选项');
+  search.key('ArrowUp',{altKey:true});
+  eq(search.isOpen(),false,'Alt上方向键收起选项');
+  const device = make(false);
+  device.key('b'); eq(device.selected(),'Beta','设备下拉支持字符定位');
+  device.key('b'); eq(device.selected(),'Bravo','重复字符循环匹配设备');
+  const prefix = make(false);
+  prefix.key('b'); prefix.key('r'); eq(prefix.selected(),'Bravo','连续字符匹配设备前缀');
+  prefix.key('a',{isComposing:true}); eq(prefix.selected(),'Bravo','输入法组合事件不误切设备');
+  prefix.key('a',{ctrlKey:true}); eq(prefix.selected(),'Bravo','控制组合键不误切设备');
 }
 
 Promise.all(actionChecks).then(() => {

@@ -4,56 +4,6 @@
  */
 (function () {
   var charts = { fps: null, frametime: null, cpu: null, mem: null, net: null, temp: null };
-  var detailChart = null;
-  var detailRequest = 0;
-  function resetSampleDetail() {
-    detailRequest++;
-    if (detailChart) { detailChart.dispose(); detailChart = null; }
-    document.getElementById('sample-detail').open = false;
-    document.getElementById('sample-detail-chart').style.display = 'none';
-    document.getElementById('sample-detail-status').textContent = '';
-    document.getElementById('sample-detail-frames').textContent = '';
-    document.getElementById('sample-detail-load').disabled = false;
-  }
-  function loadSampleDetail() {
-    if (!selected) return;
-    var request = ++detailRequest, seq = loadingSeq;
-    var button = document.getElementById('sample-detail-load');
-    var status = document.getElementById('sample-detail-status');
-    button.disabled = true;
-    status.textContent = '正在读取原始旁车…';
-    fetch('/api/sample-detail?name=' + encodeURIComponent(selected)).then(function (r) { return r.json(); }).then(function (data) {
-      if (request !== detailRequest || seq !== loadingSeq) return;
-      if (data.error) throw new Error(data.error);
-      if (!data.available) { status.textContent = '这份报告没有原始采样旁车。'; return; }
-      status.textContent = 'CPU 显示 ' + data.cpu.length + ' / ' + data.counts.cpu + ' 个样本；长帧显示 ' + data.long_frames.length + ' / ' + data.counts.long_frames + ' 条。覆盖异常窗口 ' + data.counts.coverage_windows + '，无时间基准样本 ' + data.counts.untimed_samples + '，无效记录 ' + data.scan.invalid_rows + '。' + (data.scan.complete ? '' : '读取预算或文件尾不完整：只显示已读取部分。');
-      var chartEl = document.getElementById('sample-detail-chart');
-      chartEl.style.display = 'block';
-      if (!detailChart) detailChart = echarts.init(chartEl);
-      detailChart.setOption({ animation: false, tooltip: { trigger: 'axis' }, legend: { data: ['进程 CPU（单核口径）', '整机 CPU'] },
-        xAxis: { type: 'value', name: '主机接收 / 查询结束 (s)' }, yAxis: { type: 'value', name: '%' },
-        dataZoom: [{ type: 'inside' }, { type: 'slider' }],
-        series: [{ name: '进程 CPU（单核口径）', type: 'line', showSymbol: false, connectNulls: false, data: window.PerfCharts.sampleCpuSeries(data.cpu, 'cpu_proc_pct') },
-                 { name: '整机 CPU', type: 'line', showSymbol: false, connectNulls: false, data: window.PerfCharts.sampleCpuSeries(data.cpu, 'cpu_total_pct') }] }, true);
-      var body = document.getElementById('sample-detail-frames');
-      body.textContent = '';
-      data.long_frames.forEach(function (frame) {
-        var tr = document.createElement('tr');
-        [frame.t_ms == null ? '无基准' : (frame.t_ms / 1000).toFixed(3), frame.interval_ms.toFixed(2), frame.device_present_ns,
-         String(frame.target_generation) + ' / ' + String(frame.layer_generation), frame.coverage_flags].forEach(function (value) {
-          var td = document.createElement('td'); td.textContent = value; td.style.padding = '6px'; tr.appendChild(td);
-        });
-        body.appendChild(tr);
-      });
-    }).catch(function (error) {
-      if (request === detailRequest && seq === loadingSeq) status.textContent = '读取失败：' + error.message;
-    }).finally(function () {
-      if (request === detailRequest && seq === loadingSeq) button.disabled = false;
-    });
-  }
-  document.getElementById('sample-detail-load').addEventListener('click', loadSampleDetail);
-  document.getElementById('sample-detail').addEventListener('toggle', function () { if (detailChart && this.open) detailChart.resize(); });
-  window.addEventListener('resize', function () { if (detailChart) detailChart.resize(); });
   var selected = null;
   var allRuns = [];
   var lastRunsSig = null;   // 历史列表变化签名（v36：无变化时不重建 DOM，避免每 5s 轮询闪动）
@@ -269,7 +219,6 @@
   }
 
   function selectRun(name) {
-    resetSampleDetail();
     selected = name;
     // v36 修复：loadRuns 有签名检测（无变化直接 return），点击记录后列表高亮不会
     // 更新 → 这里直接重绘列表（数据未变，仅 selected 高亮变化），避免"点了没反应"
@@ -699,68 +648,96 @@
 
   window.PerfCharts.initSortable('#report-body');
 
+  // 列表从初始位置开始吸顶，避免锁定的阅读位置补偿使左列先跳到另一个 top。
+  (function () {
+    var list = document.getElementById('run-list');
+    var header = document.querySelector('header');
+    var layout = document.querySelector('.report-layout');
+    if (!list || !header || !layout) return;
+    function updateListTop() {
+      list.style.setProperty('--run-list-top', (header.offsetHeight + parseFloat(getComputedStyle(layout).paddingTop || 0)) + 'px');
+    }
+    updateListTop();
+    if (typeof ResizeObserver !== 'undefined') {
+      var observer = new ResizeObserver(updateListTop);
+      observer.observe(header);
+    }
+    window.addEventListener('resize', updateListTop);
+  })();
+
   // v52（需求 B）：注册锁定/解锁快照钩子——由 app.js 在锁定/解锁同一处驱动，
   // 保证顶部快照条与蓝线锁定状态严格同步；解锁/切报告传 null 即隐藏。
-  // v53→v54（体验优化）：v54 改"高度展开/收起 + 淡入淡出"复合动效，并按模块分组多行。
-  // v55（冻结窗格）：锁定期间把快照条高度写入 #report-body 的 --snap-h，让 slider 的
-  //   sticky top 让位到快照条下方（见 .global-slider-wrap top:var(--snap-h)），实现
-  //   快照条贴顶冻结 + slider 到顶时纵排接力，不重叠互遮。展开动画结束后测高，隐藏即时归 0。
+  // 快照高度与吸顶偏移同步更新，并保持正在阅读的图表在视口中的位置。
+  // 只对快照内容揭示/收起，不再逐帧改变整份报告的布局高度。
   (function () {
-    var hideTimer = null;
-    var snapTimer = null;   // 展开后测高定时器（与 hideTimer 分离，防相互误清）
     var body = document.getElementById('report-body');
-
-    function setSnapH(px) {
-      if (body) body.style.setProperty('--snap-h', px + 'px');
+    var entering = null, leaving = null;
+    function clearAnimation() {
+      if (entering) { entering.cancel(); entering = null; }
+      if (leaving) { leaving.animation.cancel(); leaving.element.remove(); leaving = null; }
+    }
+    function animateSnapshot(bar, showing) {
+      if (typeof bar.animate !== 'function' || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      var frames = [{opacity:0, clipPath:'inset(0 0 100% 0)'}, {opacity:1, clipPath:'inset(0 0 0% 0)'}];
+      if (showing) {
+        entering = bar.animate(frames, {duration:240, easing:'cubic-bezier(.2,.7,.2,1)'});
+      } else {
+        // 离场副本不占布局；原快照立即收起，快速重锁不会留下延迟状态回写。
+        var rect = bar.getBoundingClientRect();
+        var ghost = bar.cloneNode(true);
+        ghost.removeAttribute('id'); ghost.setAttribute('aria-hidden','true');
+        ghost.style.cssText = 'position:fixed;pointer-events:none;margin:0;animation:none;z-index:16;top:' + rect.top + 'px;left:' + rect.left + 'px;width:' + rect.width + 'px;';
+        document.body.appendChild(ghost);
+        var animation = ghost.animate(frames.slice().reverse(), {duration:200, easing:'ease-in'});
+        leaving = {element:ghost, animation:animation};
+        animation.onfinish = function () { ghost.remove(); if (leaving && leaving.element === ghost) leaving = null; };
+      }
     }
 
     window.PerfCharts.setPinHook(function (snapshot) {
       var bar = document.getElementById('pin-snapshot');
       if (!bar) return;   // index.html 无该容器，天然无行为
+      if (body) body.classList.toggle('history-pin-active', !!snapshot);
+      clearAnimation();
+      var anchor = Array.prototype.find.call(document.querySelectorAll('#report-body .chart'), function (chart) {
+        var rect = chart.getBoundingClientRect();
+        return rect.height > 0 && rect.bottom > 0 && rect.top < window.innerHeight;
+      });
+      var before = anchor ? anchor.getBoundingClientRect().top : 0;
 
       if (!snapshot) {
-        if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
-        if (snapTimer) { clearTimeout(snapTimer); snapTimer = null; }
-        setSnapH(0);   // 解锁：slider 立即回到顶（快照条正在收起，短暂被 slider 盖住无碍）
+        if (bar.classList.contains('show')) animateSnapshot(bar, false);
         bar.classList.remove('show');
-        hideTimer = setTimeout(function () {
-          hideTimer = null;
-          if (!bar.classList.contains('show')) bar.textContent = '';   // 收拢后清内容（不残留文本）
-        }, 230);
-        return;
+        bar.textContent = '';
+      } else {
+        // 头部：📌 T=xx.x s
+        var label = document.createElement('div');
+        label.className = 'pin-snapshot-label';
+        label.textContent = '📌 T=' + snapshot.t;
+        bar.textContent = '';
+        bar.appendChild(label);
+        // 分组多行：每行 [模块名标签][指标文本]，全部 textContent 免疫注入
+        (snapshot.groups || []).forEach(function (g) {
+          var row = document.createElement('div');
+          row.className = 'pin-snapshot-row';
+          var nm = document.createElement('span');
+          nm.className = 'pin-snapshot-name';
+          nm.textContent = g.name;
+          var tx = document.createElement('span');
+          tx.className = 'pin-snapshot-text';
+          tx.textContent = g.text;
+          row.appendChild(nm);
+          row.appendChild(tx);
+          bar.appendChild(row);
+        });
+        bar.classList.add('show');
+        animateSnapshot(bar, true);
       }
-
-      if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
-      if (snapTimer) { clearTimeout(snapTimer); snapTimer = null; }
-      bar.classList.remove('show');
-      // 头部：📌 T=xx.x s
-      var label = document.createElement('div');
-      label.className = 'pin-snapshot-label';
-      label.textContent = '📌 T=' + snapshot.t;
-      bar.textContent = '';
-      bar.appendChild(label);
-      // 分组多行：每行 [模块名标签][指标文本]，全部 textContent 免疫注入
-      (snapshot.groups || []).forEach(function (g) {
-        var row = document.createElement('div');
-        row.className = 'pin-snapshot-row';
-        var nm = document.createElement('span');
-        nm.className = 'pin-snapshot-name';
-        nm.textContent = g.name;
-        var tx = document.createElement('span');
-        tx.className = 'pin-snapshot-text';
-        tx.textContent = g.text;
-        row.appendChild(nm);
-        row.appendChild(tx);
-        bar.appendChild(row);
-      });
-      // 强制 reflow 后再加 .show，保证 transition 一定触发
-      void bar.offsetWidth;
-      requestAnimationFrame(function () { bar.classList.add('show'); });
-      // 展开动画（max-height .22s）结束后测实际高度，写入 --snap-h 供 slider 让位
-      snapTimer = setTimeout(function () {
-        snapTimer = null;
-        if (bar.classList.contains('show')) setSnapH(bar.offsetHeight);
-      }, 260);
+      if (body) body.style.setProperty('--snap-h', snapshot ? (bar.offsetHeight + 10) + 'px' : '0px');
+      if (anchor) {
+        var delta = anchor.getBoundingClientRect().top - before;
+        if (delta) window.scrollBy({top:delta, left:0, behavior:'instant'});
+      }
     });
   })();
 

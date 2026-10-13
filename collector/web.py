@@ -224,6 +224,7 @@ class WebServer:
                        "run_id": "", "report_name": "", "started_at": None,
                        "target": None, "process_pattern": "",
                        "outdir": os.path.abspath(output_dir)}
+        self.preparation = None     # persistent pre-capture workspace (optional)
         self.adb = adb              # 采集器注入的 adb 实例（离线看板为 None）
         self.switch_cb = switch_cb  # 采集器注入的热切换回调 apply_target(package, pattern)
         self._stop_cb = None        # 采集器注入的停止采集回调（复用 Ctrl+C 停止路径）
@@ -342,12 +343,19 @@ class WebServer:
         """记录开始请求；普通 APK 自动解析主进程，进程模式目标校验候选 pid。"""
         with self._lock:
             target = self.status.get("target")
+            phase = self.status.get("phase")
+            if self.preparation and (phase != "waiting" or self._start_req is not None):
+                return False, "请完成设备和目标准备；采集中或保存时不能重复开始。"
         with self._probe_lock:
             pattern = self.process_pattern
         if not pattern:
             if not target:
                 return False, "请先选择要采集的应用"
             with self._lock:
+                if self.preparation and (self.status.get("phase") != "waiting" or self._start_req is not None):
+                    return False, "已有开始请求，请稍候。"
+                if self.preparation:
+                    self.status["phase"] = "starting"
                 self._start_req = {"pid": None, "name": target,
                                    "ts": time.time()}
             return True, None
@@ -362,6 +370,10 @@ class WebServer:
         if pid not in cands:
             return False, f"pid {pid} 不在当前候选列表中（请刷新探测后重新选择）"
         with self._lock:
+            if self.preparation and (self.status.get("phase") != "waiting" or self._start_req is not None):
+                return False, "已有开始请求，请稍候。"
+            if self.preparation:
+                self.status["phase"] = "starting"
             self._start_req = {"pid": pid, "name": cands[pid].get("name"),
                                "ts": time.time()}
         return True, None
@@ -474,10 +486,10 @@ class WebServer:
         except Exception as e:
             print(f"[!] label 缓存写入失败 {pkg}: {e}", flush=True)
 
-    def _find_aapt(self):
+    def _find_aapt(self, adb=None):
         """探测设备上可用的 aapt/aapt2 路径；找不到返回 None（降级 apk 解析）。"""
         try:
-            out = self.adb.shell(["sh", "-c",
+            out = (adb or self.adb).shell(["sh", "-c",
                 "ls /system/bin/aapt /system/bin/aapt2 /system/xbin/aapt "
                 "/system/xbin/aapt2 2>/dev/null"])
         except Exception:
@@ -487,10 +499,10 @@ class WebServer:
                 return line.strip()
         return None
 
-    def _aapt_label(self, aapt, apk_path):
+    def _aapt_label(self, aapt, apk_path, adb=None):
         """aapt dump badging 解析 application-label；失败返回 None。"""
         try:
-            out = self.adb.shell([aapt, "dump", "badging", apk_path])
+            out = (adb or self.adb).shell([aapt, "dump", "badging", apk_path])
         except Exception:
             return None
         for line in out.splitlines():
@@ -503,18 +515,20 @@ class WebServer:
                 return m2.group(1)
         return None
 
-    def _resolve_labels_async(self, serial, todo):
+    def _resolve_labels_async(self, serial, todo, adb=None, abort=None):
         """后台串行解析未缓存的应用名，每解析完一个立即持久化。
 
         成功写 {label, ts}，失败也写 {fail, ts}（带重试时间），避免每次
         打开下拉都对失败包重复昂贵的 unzip 解析。
         """
+        adb = adb or self.adb
+        abort = abort or self._abort_label
         labels = self._load_app_labels(serial)
-        aapt = self._find_aapt()
+        aapt = self._find_aapt(adb)
         try:
             for pkg, apk in todo:
                 # 中止标志：看板停止采集时终止剩余解析（2026-08-21）
-                if self._abort_label.is_set():
+                if abort.is_set():
                     print("[-] label 解析已中止（采集停止）", flush=True)
                     break
                 # 已解析成功 / 失败未到重试期 → 跳过（防止重复昂贵解析）
@@ -522,12 +536,14 @@ class WebServer:
                     continue
                 try:
                     if aapt:
-                        lbl = self._aapt_label(aapt, apk) or ""
+                        lbl = self._aapt_label(aapt, apk, adb) or ""
                     else:
-                        lbl = get_apk_label(self.adb, pkg, apk) or ""
+                        lbl = get_apk_label(adb, pkg, apk) or ""
                 except Exception as e:
                     print(f"[!] label解析 {pkg} 异常: {e}", flush=True)
                     lbl = ""
+                if abort.is_set():
+                    break
                 if lbl:
                     entry = {"label": lbl, "ts": time.time()}
                     print(f"[+] 应用名解析: {pkg} = {lbl}", flush=True)
@@ -541,7 +557,8 @@ class WebServer:
             traceback.print_exc()
         finally:
             with self._lock:
-                self._resolving = False
+                if self._abort_label is abort:
+                    self._resolving = False
 
     # ---------------- HTTP 服务 ----------------
     def start(self):
@@ -647,6 +664,9 @@ class WebServer:
                             "process_pattern": server.status.get("process_pattern", ""),
                             "device": server.status.get("device", ""),
                         }, ensure_ascii=False))
+                elif path == "/api/preparation":
+                    payload = server.preparation.snapshot() if server.preparation else {"available": False}
+                    self._send(200, json.dumps(payload, ensure_ascii=False))
                 elif path == "/api/device-apps":
                     # 列出手机已装第三方应用（测 APK 时下拉直接点选，无需敲命令）
                     # ?force=1 绕过 60s 包列表缓存强制重新扫描（刷新按钮用）
@@ -724,7 +744,15 @@ class WebServer:
                     return
                 parsed = urlparse(self.path)
                 qs = parse_qs(parsed.query)
-                if parsed.path == "/api/start":
+                if parsed.path == "/api/prepare-device":
+                    if server.preparation:
+                        ok, error = server.preparation.choose(
+                            (qs.get("serial") or [""])[0], (qs.get("wireless") or [""])[0] == "1",
+                            (qs.get("identity") or [None])[0])
+                    else:
+                        ok, error = False, "此入口没有启用设备准备，请使用普通采集入口。"
+                    self._send(200, json.dumps({"ok": ok, "error": error}, ensure_ascii=False))
+                elif parsed.path == "/api/start":
                     # 启动向导（2026-09-11）：用户选定进程后请求开始采集；
                     # main.py 轮询 take_start_request() 取走 → 创建 jsonl 并启动采样。
                     qs2 = parse_qs(parsed.query)
@@ -773,6 +801,9 @@ class WebServer:
                         payload = {"ok": False, "error": str(e)}
                     self._send(200, json.dumps(payload, ensure_ascii=False))
                 elif parsed.path == "/api/switch-target":
+                    if server.preparation and server.status.get("phase") not in ("waiting", "running"):
+                        self._send(200, json.dumps({"ok": False, "error": "请等待设备准备或报告保存完成。"}, ensure_ascii=False))
+                        return
                     package = (qs.get("package") or [""])[0].strip()
                     pattern = (qs.get("process_pattern") or [""])[0].strip()
                     ok, msg = self._switch_target(package, pattern)
@@ -856,7 +887,7 @@ class WebServer:
                     self.close_connection = True
 
             # ---------------- 内部 ----------------
-            def _scan_device_apps(self, serial):
+            def _scan_device_apps(self, serial, adb=None):
                 """执行一次 pm list packages -3 -f 并缓存结果（TTL）。
 
                 并发请求只放行一个扫描，其余等待并复用结果；扫描失败时
@@ -872,7 +903,7 @@ class WebServer:
                     if cached and cached[0] > now:
                         return cached[1], None
                     try:
-                        out = server.adb.shell(["pm", "list", "packages", "-3", "-f"])
+                        out = (adb or server.adb).shell(["pm", "list", "packages", "-3", "-f"])
                     except Exception as e:
                         return [], f"列出应用失败: {e}"
                     apps, seen = [], set()
@@ -900,12 +931,13 @@ class WebServer:
                 包列表结果带 60s TTL 缓存，避免每次打开下拉/刷新都全量 pm list；
                 force=True（?force=1，刷新按钮用）绕过缓存强制重新扫描。
                 """
-                if not server.adb:
-                    return {"ok": False, "apps": [], "error": "离线看板无设备连接，请用 start_perfcollect.bat 启动采集"}
-                serial = server.adb.serial
+                adb = server.adb
+                if not adb:
+                    return {"ok": False, "apps": [], "error": "请先在页面连接手机并选择采集方式"}
+                serial = adb.serial
                 if force:
                     server._apps_cache.pop(serial, None)
-                scanned, err = self._scan_device_apps(serial)
+                scanned, err = self._scan_device_apps(serial, adb)
                 if err:
                     return {"ok": False, "apps": [], "error": err}
                 # 浅拷贝条目：缓存里的 dict 是共享引用，本次响应会 pop 掉 apk，
@@ -921,11 +953,11 @@ class WebServer:
                 # 不能只返回"本次是否启动"，否则后台在跑时前端会停止轮询。
                 resolving = False
                 with server._lock:
-                    if todo and not server._resolving:
+                    if todo and not server._resolving and server.adb is adb and not server._abort_label.is_set():
                         server._resolving = True
                         threading.Thread(
                             target=server._resolve_labels_async,
-                            args=(serial, todo),
+                            args=(serial, todo, adb, server._abort_label),
                             daemon=True,
                         ).start()
                     resolving = server._resolving

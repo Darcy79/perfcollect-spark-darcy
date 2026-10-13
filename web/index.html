@@ -3,12 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PerfCollect 自研工具 · 实时看板</title>
-<link rel="stylesheet" href="/assets/style.css?v=93">
+<title>PerfCollect 自研工具 · 采集工作台</title>
+<link rel="stylesheet" href="/assets/style.css?v=104">
 </head>
-<body>
+<body class="workspace-boot">
+<div id="workspace-bootloader" role="status"><span class="workspace-spinner" aria-hidden="true"></span><span id="boot-message">正在打开工作台…</span><a href="/">重新加载</a></div>
+<svg class="workspace-icons" aria-hidden="true"><defs>
+  <symbol id="icon-usb" viewBox="0 0 24 24"><path d="M12 21V3m-3 3 3-3 3 3M12 15l-5-4V8m5 10 5-4v-3"/><circle cx="7" cy="7" r="1"/><path d="M16 8h2v3h-2z"/></symbol>
+  <symbol id="icon-wifi" viewBox="0 0 24 24"><path d="M3 8a15 15 0 0 1 18 0M6 12a10 10 0 0 1 12 0M9 16a5 5 0 0 1 6 0"/><circle cx="12" cy="20" r=".6"/></symbol>
+</defs></svg>
 <header>
-  <h1>性能采集 · 实时看板</h1>
+  <h1>PerfCollect · 采集工作台</h1>
+  <a class="workspace-history" href="/report.html" target="_blank" rel="noopener">历史报告 ↗</a>
+  <div id="target-home"></div>
   <div id="target-box">
     <label for="tb-select" class="tb-label">被测应用</label>
     <select id="tb-select" title="切换被测目标（微信小游戏 / 已安装 App / 自定义包名）"></select>
@@ -19,6 +26,8 @@
   <div id="status-bar">
     <span id="st-device">设备: -</span>
     <span id="st-system">系统: -</span>
+    <span id="st-connection">连接: -</span>
+    <span id="st-network-note" hidden style="color:#ffca28"></span>
     <span id="st-pid">进程: -</span>
     <span id="st-run">本次: -</span>
     <span id="st-outdir" title="本次采集数据保存目录">数据: -</span>
@@ -27,8 +36,32 @@
   </div>
 </header>
 
+<div id="workspace-prelude" hidden>
+  <div class="workspace-intro"><span class="workspace-eyebrow">PERFCOLLECT WORKSPACE</span><h2 id="workspace-heading" tabindex="-1">开始一次性能采集</h2><p>连接手机，选择目标，再开始记录。</p></div>
+  <div class="workspace-grid"><div class="workspace-card">
+  <ol class="workspace-steps" aria-label="采集准备步骤"><li id="step-connect" aria-current="step"><span>1</span>连接手机</li><li id="step-target"><span>2</span>选择目标</li><li id="step-capture"><span>3</span>开始采集</li></ol>
+<section id="connection-prepare" hidden>
+  <div class="wizard-head"><h2 id="cp-title" tabindex="-1">连接手机</h2></div>
+  <div class="connection-progress"><span id="cp-spinner" class="workspace-spinner" hidden aria-hidden="true"></span><p id="cp-message" role="status" aria-live="polite">正在检查手机连接…</p></div>
+  <p id="cp-guide">首次使用请打开手机的「开发者选项 → USB调试」，插线后在手机上允许调试。手机连接Wi-Fi后可一键转无线。</p>
+  <div id="cp-controls">
+    <label class="workspace-field" for="cp-device">被测设备</label><select id="cp-device" aria-label="选择手机"></select>
+    <div class="connection-modes" role="group" aria-label="采集连接方式">
+      <button id="cp-mode-usb" type="button" aria-pressed="false" disabled><svg aria-hidden="true"><use href="#icon-usb"/></svg><span>USB 有线<small id="cp-usb-state">请先选择设备</small></span></button>
+      <button id="cp-mode-wifi" type="button" aria-pressed="false" disabled><svg aria-hidden="true"><use href="#icon-wifi"/></svg><span>Wi-Fi 无线<small id="cp-wifi-state">请先选择设备</small></span></button>
+    </div>
+    <div id="cp-wireless-details" class="workspace-reveal" aria-hidden="true" inert><div><p>工具将自动建立并验证无线连接。准备完成前请保留USB线。</p></div></div>
+    <div class="workspace-actions"><button id="cp-usb" class="wz-btn primary" type="button" disabled>继续选择应用 →</button>
+    <button id="cp-wifi" class="wz-btn primary" type="button" hidden>准备无线连接 →</button></div>
+  </div>
+  <p id="cp-device-hint" class="wizard-sub" hidden></p>
+    <button id="cp-reset" class="wz-btn ghost" type="button" hidden>更改连接</button>
+  <details id="cp-hint" class="connection-note"><summary>无线连接与网络统计说明</summary><p>电脑和手机需处于可互通的同一局域网。仅在可信网络使用：USB引导的无线ADB不加密，其通信会计入整机网络指标。</p></details>
+</section>
+
 <!-- v59 启动向导：用户确认目标进程后才开始记录（探测阶段不产生任何采集数据） -->
 <div id="wizard" class="wizard" style="display:none">
+  <div id="workspace-target-slot"></div>
   <div class="wizard-head">
     <h2 id="wz-title">① 选择要采集的进程</h2>
     <span class="wizard-sub">确认「开始采集」之前不会记录任何数据</span>
@@ -38,8 +71,11 @@
   <div class="wizard-foot">
     <button id="wz-refresh" type="button" class="wz-btn ghost">↻ 重新探测</button>
     <button id="wz-start" type="button" class="wz-btn primary" disabled>▶ 开始采集</button>
-    <span id="wz-msg" class="wz-msg"></span>
+    <span id="wz-msg" class="wz-msg" role="status"></span>
   </div>
+</div>
+  </div><a class="workspace-aside workspace-history-card" href="/report.html" target="_blank" rel="noopener"><h2>历史报告 <span aria-hidden="true">↗</span></h2><p>浏览、改名和导出本机报告。</p><small>无需连接手机</small></a></div>
+  <p class="workspace-local">数据仅保存在本机 · 准备期间不记录采集数据</p>
 </div>
 <!-- v59 采集期目标错配告警（层与进程索引不一致 → 可能采到别的小游戏实例） -->
 <div id="mismatch-banner" class="mismatch-banner" style="display:none">
@@ -49,6 +85,7 @@
 </div>
 
 <main>
+  <section id="capture-result" hidden role="status"><div><h2 id="capture-result-title">采集已停止</h2><p id="capture-result-message">可以继续查看当前曲线，或准备下一次采集。</p></div><button id="capture-new" class="wz-btn primary" type="button">准备下一次采集 →</button></section>
   <div class="drag-hint" style="position:relative">
     <span>↕ 拖动卡片可调整顺序（自动记住）</span>
     <span class="hint-btn" id="hint-btn" title="报告文件说明">?</span>
@@ -98,11 +135,11 @@
 </main>
 
 <footer>
-  <span>自研 PerfCollect · 数据仅存本地（output/*.jsonl）· <a href="/report.html">历史报告 →</a></span>
+  <span>自研 PerfCollect · 数据仅存本地（output/*.jsonl）</span>
 </footer>
 
-<script src="/assets/echarts.min.js?v=93"></script>
-<script src="/assets/app.js?v=93"></script>
+<script src="/assets/echarts.min.js?v=104"></script>
+<script src="/assets/app.js?v=104"></script>
 <script>
 (function () {
   var charts = { fps: null, frametime: null, cpu: null, mem: null, net: null, temp: null };
@@ -126,6 +163,8 @@
   var annotationBusy = false;
 
   function init() {
+    mountSelect(wzEl('cp-device'), '选择手机');
+    mountSelect(wzEl('tb-select'), '被测应用');
     charts.fps = window.PerfCharts.makeChart('chart-fps', 'live');
     charts.frametime = window.PerfCharts.makeChart('chart-frametime', 'live');
     charts.cpu = window.PerfCharts.makeChart('chart-cpu', 'live');
@@ -163,7 +202,7 @@
     window.PerfCharts.updateStats(charts, rows);
     window.PerfCharts.setPinData(rows);
     renderAnnotationState();
-    if (startedAt) {
+    if (startedAt || workspacePhase === 'completed' || workspacePhase === 'saving') {
       var secs = Math.round((rows[rows.length - 1].t_ms || 0) / 1000);
       document.getElementById('st-elapsed').textContent = '时长: ' + secs + 's';
     }
@@ -279,6 +318,10 @@
   // 用户点「开始采集」→ POST /api/start 后后端才创建 jsonl 并开始采样。
   var wzSel = null;      // 当前选中的 pid
   var wzData = null;     // 最近一次探测结果
+  var candidateRequest = 0;
+  var candidatePending = false;
+  var startPending = false;
+  var targetPending = false;
 
   function wzEl(id) { return document.getElementById(id); }
 
@@ -292,16 +335,16 @@
     while (list.firstChild) list.removeChild(list.firstChild);
     if (wzData.direct) {
       var target = wzData.target || (currentTarget && currentTarget.package) || '当前应用';
-      wzEl('wz-title').textContent = '① 确认要采集的应用';
+      wzEl('wz-title').textContent = '确认采集目标';
       wzEl('wz-layer').textContent = '普通 APK：' + target + '（开始后自动解析主进程）';
       var ready = document.createElement('div');
-      ready.className = 'wz-msg';
-      ready.textContent = '已选择应用，无需再选择微信 AppBrand 进程。';
+      ready.className = 'workspace-ready';
+      ready.textContent = '✓ 应用已就绪，点击「开始采集」后记录数据。';
       list.appendChild(ready);
-      wzEl('wz-start').disabled = false;
+      syncStartButton();
       return;
     }
-    wzEl('wz-title').textContent = '① 选择要采集的进程';
+    wzEl('wz-title').textContent = '选择小游戏进程';
     if (!wzData.ok) {
       var err = document.createElement('div');
       err.className = 'wz-msg';
@@ -320,7 +363,7 @@
       return;
     }
     cands.forEach(function (c) {
-      var row = document.createElement('div');
+      var row = document.createElement('label');
       row.className = 'wz-item';
       var radio = document.createElement('input');
       radio.type = 'radio';
@@ -343,14 +386,22 @@
         ' · CPU增量 ' + (c.cpu_delta_pct != null ? c.cpu_delta_pct + '%' : '?');
       row.appendChild(meta);
       row.onclick = function () { selectWz(c.pid); };
-      if (c.recommended) {
+      radio.onchange = function () { if (radio.checked) selectWz(c.pid); };
+      if (Number(wzSel) === Number(c.pid) || (wzSel == null && c.recommended)) {
         wzSel = c.pid;
         radio.checked = true;
         row.classList.add('sel');
       }
       list.appendChild(row);
     });
-    wzEl('wz-start').disabled = (wzSel == null);
+    syncStartButton();
+  }
+
+  function syncStartButton() {
+    wzEl('wz-start').disabled = startPending || targetPending || candidatePending ||
+      (workspacePhase && workspacePhase !== 'waiting') || !wzData || !wzData.ok || (!wzData.direct && wzSel == null);
+    wzEl('wz-start').textContent = startPending ? '正在启动…' : '▶ 开始采集';
+    wzEl('wz-start').setAttribute('aria-busy', String(startPending));
   }
 
   function selectWz(pid) {
@@ -364,37 +415,51 @@
         if (radios[j].parentNode) radios[j].parentNode.classList.add('sel');
       }
     }
-    wzEl('wz-start').disabled = false;
+    syncStartButton();
   }
 
   function loadCandidates(force) {
+    var request = ++candidateRequest;
+    candidatePending = true;
+    syncStartButton();
     wzEl('wz-msg').textContent = '⏳ 正在探测…';
     fetch('/api/candidates' + (force ? '?force=1' : ''))
       .then(function (r) { return r.json(); })
       .then(function (d) {
+        if (request !== candidateRequest || (workspacePhase && workspacePhase !== 'waiting')) return;
+        candidatePending = false;
         wzEl('wz-msg').textContent = '';
-        wzSel = null;
+        if (!(d.candidates || []).some(function(c) { return Number(c.pid) === Number(wzSel); })) wzSel = null;
         renderWizard(d);
       })
-      .catch(function () { wzEl('wz-msg').textContent = '✘ 探测请求失败（看板服务可能已关闭）'; });
+      .catch(function () {
+        if (request !== candidateRequest) return;
+        candidatePending = false; wzData = null; syncStartButton();
+        wzEl('wz-msg').textContent = '探测请求失败，请重试并检查工具是否仍在运行。';
+      });
   }
 
   function startCapture() {
+    if (wzEl('wz-start').disabled || startPending || targetPending || candidatePending) return;
     var direct = !!(wzData && wzData.direct);
     if (!direct && wzSel == null) return;
+    startPending = true; syncStartButton();
     wzEl('wz-msg').textContent = '⏳ 正在开始采集…';
     var startUrl = direct ? '/api/start' : '/api/start?pid=' + encodeURIComponent(wzSel);
+    var accepted = false;
     fetch(startUrl, { method: 'POST' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (d && d.ok) {
+          accepted = true;
           wzEl('wz-msg').textContent = '✔ 已开始采集（数据已开始记录）';
           refreshStatus();
         } else {
           wzEl('wz-msg').textContent = '✘ ' + ((d && d.error) || '开始失败');
         }
       })
-      .catch(function () { wzEl('wz-msg').textContent = '✘ 请求失败'; });
+      .catch(function () { wzEl('wz-msg').textContent = '✘ 请求失败'; })
+      .finally(function() { if (!accepted) startPending = false; syncStartButton(); });
   }
 
   // 根据 /api/status 的 phase 切换向导显示；mismatch 时展示采集期告警
@@ -441,8 +506,425 @@
     }
   }
 
+  var workspacePhase = null;
+  var selectControls = [];
+  function syncSelects() { selectControls.forEach(function(c) { c.sync(); }); }
+  function mountSelect(select, label) {
+    var root = document.createElement('div'); root.className = 'perf-select';
+    var button = document.createElement('button'); button.type = 'button'; button.className = 'perf-select-trigger';
+    button.setAttribute('role','combobox'); button.setAttribute('aria-label',label);
+    button.setAttribute('aria-haspopup','listbox'); button.setAttribute('aria-expanded','false');
+    var menu = document.createElement('div'); menu.className = 'perf-select-menu'; menu.hidden = true;
+    menu.id = select.id + '-menu'; button.setAttribute('aria-controls',menu.id);
+    var search = document.createElement('input'); search.type = 'search'; search.placeholder = '搜索应用名称或包名';
+    search.setAttribute('aria-label','筛选应用'); search.hidden = select.id !== 'tb-select';
+    var list = document.createElement('div'); list.className = 'perf-select-options'; list.setAttribute('role','listbox'); list.setAttribute('aria-label',label);
+    list.id = select.id + '-options'; button.setAttribute('aria-controls',list.id);
+    menu.appendChild(search); menu.appendChild(list);
+    select.parentNode.insertBefore(root,select); root.appendChild(select); root.appendChild(button); root.appendChild(menu);
+    select.classList.add('perf-select-native'); select.tabIndex = -1; select.setAttribute('aria-hidden','true');
+    var open = false, active = -1, shown = [], closeTimer = null, signature = '';
+    var typedPrefix = '', typedAt = 0;
+    function close(focus) {
+      if (!open) return;
+      open = false; root.classList.remove('is-open'); menu.inert = true;
+      button.setAttribute('aria-expanded','false'); button.removeAttribute('aria-activedescendant');
+      clearTimeout(closeTimer); closeTimer = setTimeout(function() { menu.hidden = true; },140);
+      if (focus) button.focus();
+    }
+    function mark(index, direction) {
+      if (!shown.length) return;
+      if (!shown.some(function(o) { return !o.disabled; })) { active = -1; return; }
+      active = (index + shown.length) % shown.length;
+      while (shown[active].disabled) active = (active + (direction || 1) + shown.length) % shown.length;
+      Array.from(list.querySelectorAll('[role="option"]')).forEach(function(el,i) { el.classList.toggle('is-active',i === active); });
+      var el = list.querySelectorAll('[role="option"]')[active];
+      if (el) { button.setAttribute('aria-activedescendant',el.id); el.scrollIntoView({block:'nearest'}); }
+    }
+    function choose(option) {
+      option = Array.from(select.options).find(function(current) { return current.value === option.value; });
+      if (!option) return;
+      if (select.disabled || option.disabled) return;
+      select.value = option.value;
+      close(true); sync();
+      select.dispatchEvent(new Event('change',{bubbles:true}));
+    }
+    function renderOptions() {
+      var previousActive = shown[active] && shown[active].value;
+      var term = search.value.trim().toLowerCase();
+      shown = Array.from(select.options).filter(function(o) { return o.textContent.toLowerCase().indexOf(term) >= 0; });
+      list.replaceChildren();
+      shown.forEach(function(o,i) {
+        var row = document.createElement('div'); row.className = 'perf-select-option'; row.id = select.id + '-option-' + i;
+        row.setAttribute('role','option'); row.setAttribute('aria-selected',String(o.selected));
+        row.setAttribute('aria-disabled',String(o.disabled));
+        row.textContent = o.textContent; row.title = o.title || o.textContent;
+        row.onclick = function() { choose(o); };
+        row.onpointermove = function() { if (!o.disabled && active !== i) mark(i); };
+        list.appendChild(row);
+      });
+      if (!shown.length) { var empty = document.createElement('p'); empty.textContent = '没有匹配选项'; empty.className = 'perf-select-empty'; list.appendChild(empty); }
+      var retained = shown.findIndex(function(o) { return o.value === previousActive; });
+      active = retained >= 0 ? retained : Math.max(0,shown.findIndex(function(o) { return o.selected; }));
+      mark(active);
+    }
+    function sync() {
+      var selected = select.options[select.selectedIndex];
+      var text = selected ? selected.textContent : '正在加载…';
+      if (button.textContent !== text) button.textContent = text;
+      button.title = selected ? selected.title || text : text;
+      button.disabled = select.disabled;
+      if (select.disabled) close(false);
+      var nextSignature = Array.from(select.options).map(function(o) { return [o.value,o.textContent,o.disabled,o.selected].join('|'); }).join('\n');
+      if (open && signature !== nextSignature) renderOptions();
+      signature = nextSignature;
+    }
+    function show() {
+      if (button.disabled) return;
+      selectControls.forEach(function(c) { if (c.root !== root) c.close(false); });
+      clearTimeout(closeTimer); search.value = ''; menu.hidden = false; menu.inert = false; open = true;
+      var bounds = root.getBoundingClientRect();
+      root.classList.toggle('opens-up', innerHeight - bounds.bottom < 220 && bounds.top > 240);
+      root.classList.add('is-open'); button.setAttribute('aria-expanded','true'); renderOptions();
+      if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) menu.animate([{opacity:0,transform:'translateY(-5px) scale(.99)'},{opacity:1,transform:'translateY(0) scale(1)'}],{duration:180,easing:'cubic-bezier(.2,.7,.2,1)'});
+    }
+    button.onclick = function() { if (open) close(false); else show(); };
+    function keydown(e) {
+      if (e.isComposing) return;
+      if (e.key === 'Escape') { close(true); e.preventDefault(); return; }
+      if (e.key === 'Tab') { close(false); return; }
+      if (e.altKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+        e.preventDefault(); if (e.key === 'ArrowUp') close(true); else if (!open) show(); return;
+      }
+      if (e.target === search && ['Home','End','ArrowLeft','ArrowRight'].indexOf(e.key) >= 0) return;
+      if (e.ctrlKey || e.metaKey) return;
+      if (['ArrowDown','ArrowUp','Home','End'].indexOf(e.key) >= 0) {
+        e.preventDefault(); if (!open) show(); else mark(e.key === 'Home' ? 0 : e.key === 'End' ? shown.length-1 : active + (e.key === 'ArrowUp' ? -1 : 1), e.key === 'ArrowUp' || e.key === 'End' ? -1 : 1);
+      } else if (e.key === 'Enter' || (e.key === ' ' && e.target === button)) {
+        e.preventDefault(); if (!open) show(); else if (shown[active]) choose(shown[active]);
+      } else if (e.target === button && e.key.length === 1 && !e.altKey) {
+        if (!search.hidden) {
+          if (!open) show(); search.focus(); search.value = e.key; renderOptions(); e.preventDefault();
+        } else {
+          var now = Date.now();
+          typedPrefix = now - typedAt > 700 ? e.key : typedPrefix + e.key;
+          typedAt = now;
+          if (typedPrefix.split('').every(function(c) { return c.toLowerCase() === e.key.toLowerCase(); })) typedPrefix = e.key;
+          var options = Array.from(select.options);
+          var selectedIndex = open && shown[active] ? options.indexOf(shown[active]) : select.selectedIndex;
+          var start = typedPrefix.length === 1 ? selectedIndex + 1 : selectedIndex;
+          var matched = null;
+          for (var i = 0; i < options.length; i++) {
+            var option = options[(Math.max(0,start) + i) % options.length];
+            if (!option.disabled && option.textContent.trim().toLowerCase().indexOf(typedPrefix.toLowerCase()) === 0) { matched = option; break; }
+          }
+          if (matched) {
+            if (open) mark(shown.indexOf(matched)); else choose(matched);
+          }
+          e.preventDefault();
+        }
+      }
+    }
+    button.onkeydown = keydown; search.onkeydown = keydown; search.oninput = renderOptions;
+    document.addEventListener('pointerdown',function(e) { if (!root.contains(e.target)) close(false); });
+    root.addEventListener('focusout',function(e) { if (e.relatedTarget && !root.contains(e.relatedTarget)) close(false); });
+    new MutationObserver(sync).observe(select,{attributes:true,childList:true,subtree:true,characterData:true});
+    select.addEventListener('change',sync);
+    selectControls.push({root:root,sync:sync,close:close}); sync();
+  }
+  var prepareSnapshot = '';
+  var preparePending = false;
+  var preparationDevices = [];
+  var preparationAvailable = false;
+  var preparationBusy = false;
+  var connectionMode = '';
+  var preparationRequest = 0;
+  var appRequest = 0;
+  var targetRequest = 0;
+  var statusRequest = 0;
+  var connectionError = '';
+  var showPreparation = false;
+  var preparationGroups = [];
+  function groupPreparationDevices(devices) {
+    var buckets = {};
+    devices.forEach(function(d) {
+      var key = d.state === 'device' && d.identity ? 'identity:' + d.identity : 'transport:' + d.serial;
+      (buckets[key] || (buckets[key] = [])).push(d);
+    });
+    var groups = [];
+    Object.keys(buckets).forEach(function(key) {
+      var entries = buckets[key];
+      var ambiguous = ['usb','wifi'].some(function(kind) { return entries.filter(function(d) { return d.transport === kind; }).length > 1; });
+      (ambiguous ? entries.map(function(d) { return [d]; }) : [entries]).forEach(function(list) {
+        groups.push({key: ambiguous ? 'transport:' + list[0].serial : key, identity: list[0].identity || '',
+          model: list[0].model || '手机', connections: list});
+      });
+    });
+    return groups;
+  }
+  function selectedPreparationGroup() {
+    return preparationGroups.find(function(g) { return g.key === wzEl('cp-device').value; });
+  }
+  var workspaceSizeAnimation = null;
+  function transitionWorkspaceSize(previousHeight) {
+    if (!previousHeight || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    var card = document.querySelector('.workspace-card');
+    requestAnimationFrame(function() {
+      if (workspaceSizeAnimation) workspaceSizeAnimation.cancel();
+      var nextHeight = card.getBoundingClientRect().height;
+      if (Math.abs(nextHeight - previousHeight) < 2) return;
+      workspaceSizeAnimation = card.animate([{height: previousHeight + 'px'}, {height: nextHeight + 'px'}], {duration: 240, easing: 'cubic-bezier(.2,.7,.2,1)'});
+    });
+  }
+  function selectedPreparationDevice() {
+    var group = selectedPreparationGroup();
+    if (group) return group.connections.find(function(d) { return d.state === 'device' && d.transport === connectionMode; }) ||
+      group.connections.find(function(d) { return d.state === 'device'; }) || group.connections[0];
+    return preparationDevices.find(function(d) { return d.serial === wzEl('cp-device').value; });
+  }
+  function renderConnectionChoices() {
+    var selected = selectedPreparationDevice();
+    var group = selectedPreparationGroup();
+    var kind = selected && selected.transport;
+    var hasUsb = group ? group.connections.some(function(d) { return d.transport === 'usb' && d.state === 'device'; }) : kind === 'usb';
+    var hasWifi = group ? group.connections.some(function(d) { return d.transport === 'wifi' && d.state === 'device'; }) : kind === 'wifi';
+    var blocked = !preparationAvailable || preparationBusy || preparePending || !selected || selected.state !== 'device';
+    var wirelessSetup = kind === 'usb' && connectionMode === 'wifi';
+    wzEl('cp-guide').textContent = hasUsb && hasWifi ? '设备已连接USB与Wi-Fi，选择本次采集方式。' : selected && selected.state === 'device'
+      ? kind === 'wifi' ? '无线连接可直接使用；需要切换有线时，请插入USB线。'
+        : kind === 'usb' ? '可以继续使用USB，也可以选择Wi-Fi，准备无线连接。'
+          : '可以使用当前ADB连接继续选择应用。'
+      : '首次使用请打开手机的「开发者选项 → USB调试」，插线后在手机上允许调试。';
+    wzEl('cp-mode-usb').disabled = blocked || !hasUsb;
+    wzEl('cp-mode-wifi').disabled = blocked || (!hasUsb && !hasWifi);
+    wzEl('cp-mode-usb').setAttribute('aria-pressed', String(connectionMode === 'usb'));
+    wzEl('cp-mode-wifi').setAttribute('aria-pressed', String(connectionMode === 'wifi'));
+    wzEl('cp-usb-state').textContent = !selected ? '请先选择设备' : hasUsb ? '连接可用' : '请插入USB线';
+    wzEl('cp-wifi-state').textContent = !selected ? '请先选择设备' : hasWifi ? '连接可用' : hasUsb ? '需准备连接' : '需USB引导';
+    wzEl('cp-usb').hidden = wirelessSetup;
+    wzEl('cp-usb').disabled = blocked;
+    wzEl('cp-usb').textContent = preparePending || preparationBusy ? '正在验证连接…' : '继续选择应用 →';
+    wzEl('cp-wifi').hidden = !wirelessSetup;
+    wzEl('cp-wifi').disabled = blocked;
+    wzEl('cp-wifi').textContent = preparePending || preparationBusy ? '正在准备无线…' : '准备无线连接 →';
+    wzEl('cp-controls').setAttribute('aria-busy', String(preparePending || preparationBusy));
+    wzEl('cp-spinner').hidden = !(preparePending || preparationBusy);
+    var reveal = wzEl('cp-wireless-details');
+    reveal.classList.toggle('is-open', wirelessSetup);
+    reveal.setAttribute('aria-hidden', String(!wirelessSetup));
+    reveal.inert = !wirelessSetup;
+    wzEl('cp-device-hint').hidden = !selected || kind !== 'unknown';
+    wzEl('cp-device-hint').textContent = '连接类型尚未确认，可以使用当前ADB连接；暂不支持从此连接准备无线。';
+    wzEl('cp-hint').hidden = connectionMode !== 'wifi';
+    syncSelects();
+  }
+  function selectConnectionMode(mode) {
+    connectionMode = mode; connectionError = '';
+    wzEl('cp-message').classList.remove('is-error');
+    var controls = wzEl('cp-controls');
+    if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) controls.animate([{opacity:.8,transform:'translateY(3px)'},{opacity:1,transform:'translateY(0)'}], {duration:180,easing:'ease-out'});
+    renderConnectionChoices();
+  }
+  wzEl('cp-mode-usb').onclick = function() { selectConnectionMode('usb'); };
+  wzEl('cp-mode-wifi').onclick = function() { selectConnectionMode('wifi'); };
+  function chooseConnection(wireless) {
+    if (preparePending) return;
+    var device = selectedPreparationDevice();
+    var serial = device && device.serial;
+    if (!serial) return;
+    preparePending = true;
+    connectionError = '';
+    renderConnectionChoices();
+    document.getElementById('cp-message').textContent = wireless
+      ? '正在准备并验证无线连接，请保留USB线…' : '正在验证手机连接…';
+    document.getElementById('cp-usb').disabled = true;
+    document.getElementById('cp-wifi').disabled = true;
+    fetch('/api/prepare-device?serial=' + encodeURIComponent(serial) + (wireless ? '&wireless=1' : '') +
+      (device.identity ? '&identity=' + encodeURIComponent(device.identity) : ''), {method:'POST'})
+      .then(function(r) { return r.json(); }).then(function(d) {
+        if (!d.ok) connectionError = d.error || '连接准备失败';
+      }).catch(function() {
+        connectionError = '请求失败，请检查工具是否仍在运行。';
+      }).finally(function() { preparePending = false; refreshStatus(); });
+  }
+  document.getElementById('cp-usb').onclick = function() { chooseConnection(false); };
+  document.getElementById('cp-wifi').onclick = function() { chooseConnection(true); };
+  document.getElementById('cp-reset').onclick = function() {
+    if (preparePending || targetPending || startPending) return;
+    wzEl('cp-reset').disabled = true;
+    ++candidateRequest; ++appRequest; ++targetRequest;
+    fetch('/api/stop', {method:'POST'}).then(function(r) { return r.json(); }).then(function(d) {
+      if (!d.ok) connectionError = d.error || '返回连接失败';
+      refreshStatus();
+    }).catch(function() { wzEl('cp-message').textContent = '返回连接失败，请重试。'; })
+      .finally(function() { wzEl('cp-reset').disabled = false; });
+  };
+  function updatePreparation(s) {
+    var panel = document.getElementById('connection-prepare');
+    if (!s.workspace) {
+      panel.hidden = true;
+      var legacyWaiting = s.phase === 'waiting';
+      wzEl('workspace-prelude').hidden = !legacyWaiting;
+      document.body.classList.toggle('workspace-enabled', legacyWaiting);
+      document.body.dataset.workspacePhase = s.phase || 'running';
+      var legacySlot = legacyWaiting ? wzEl('workspace-target-slot') : wzEl('target-home');
+      if (wzEl('target-box').parentNode !== legacySlot) legacySlot.appendChild(wzEl('target-box'));
+      wzEl('target-box').hidden = false;
+      wzEl('tb-stop').hidden = legacyWaiting;
+      return;
+    }
+    var phase = s.phase === 'prepare' && s.completed && !showPreparation ? 'completed' : s.phase;
+    var previousHeight = workspacePhase && workspacePhase !== phase && workspacePhase !== 'running'
+      ? document.querySelector('.workspace-card').getBoundingClientRect().height : 0;
+    var reviewing = phase === 'completed' || (phase === 'saving' && !!s.report_name);
+    var preparing = phase !== 'running' && !reviewing;
+    document.body.classList.add('workspace-enabled');
+    document.body.dataset.workspacePhase = phase;
+    wzEl('capture-result').hidden = !reviewing;
+    wzEl('capture-new').disabled = phase !== 'completed';
+    wzEl('capture-result-title').textContent = phase === 'saving' ? '正在保存本次采集…' : '采集已停止';
+    wzEl('capture-result-message').textContent = phase === 'saving' ? '曲线保留在此，保存完成后可准备下一次采集。' : s.completion_error || '曲线已保留，可以继续查看，或准备下一次采集。';
+    document.querySelector('.workspace-history').href = reviewing && s.report_name ? '/report.html#name=' + encodeURIComponent(s.report_name) : '/report.html';
+    wzEl('workspace-prelude').hidden = !preparing;
+    var targetBox = wzEl('target-box');
+    var slot = phase === 'waiting' ? wzEl('workspace-target-slot') : wzEl('target-home');
+    if (targetBox.parentNode !== slot) slot.appendChild(targetBox);
+    document.querySelector('main').hidden = !s.report_name;
+    targetBox.hidden = phase !== 'waiting' && phase !== 'running';
+    wzEl('tb-stop').hidden = phase !== 'running';
+    panel.hidden = !preparing;
+    document.getElementById('cp-reset').hidden = phase !== 'waiting';
+    document.getElementById('cp-title').textContent = phase === 'prepare' ? '连接手机' : phase === 'waiting' ? '✓ 手机已连接' : '请稍候';
+    document.getElementById('cp-guide').hidden = phase !== 'prepare';
+    document.getElementById('cp-controls').hidden = phase !== 'prepare';
+    document.getElementById('tb-select').disabled = targetPending || startPending || (phase !== 'waiting' && phase !== 'running');
+    document.getElementById('tb-refresh').disabled = phase !== 'waiting' && phase !== 'running';
+    document.getElementById('tb-stop').disabled = phase !== 'running';
+    var previousPhase = workspacePhase;
+    workspacePhase = phase;
+    if (previousPhase !== phase) {
+      ++preparationRequest; ++appRequest; ++targetRequest;
+      ++candidateRequest; candidatePending = false; wzData = null;
+      clearTimeout(loadApps._timer);
+      targetPending = false;
+      if (phase !== 'waiting') startPending = false;
+      connectionError = '';
+      var labels = {prepare:'开始一次性能采集', initializing:'正在准备设备', waiting:'选择本次采集目标', starting:'正在启动采集', saving:'正在保存本次报告'};
+      wzEl('workspace-heading').textContent = labels[phase] || '采集工作台';
+      ['connect','target','capture'].forEach(function(step, i) {
+        var active = phase === 'prepare' || phase === 'initializing' ? 0 : phase === 'waiting' ? 1 : 2;
+        var el = wzEl('step-' + step);
+        el.classList.toggle('is-complete', i < active);
+        if (i === active) el.setAttribute('aria-current','step'); else el.removeAttribute('aria-current');
+      });
+      if (previousPhase && preparing && !wzEl('workspace-prelude').contains(document.activeElement)) wzEl('workspace-heading').focus({preventScroll:true});
+      if (phase === 'running' || reviewing) {
+        if (phase === 'running') showPreparation = false;
+        document.querySelector('main').classList.remove('workspace-enter');
+        void document.querySelector('main').offsetWidth;
+        document.querySelector('main').classList.add('workspace-enter');
+        requestAnimationFrame(function() { Object.keys(charts).forEach(function(k) { if (charts[k]) charts[k].resize(); }); });
+      }
+      if (phase === 'prepare') {
+        wzEl('tb-status').textContent = '';
+        if (previousPhase === 'completed') {
+          var prelude = wzEl('workspace-prelude');
+          prelude.classList.remove('workspace-enter');
+          void prelude.offsetWidth;
+          prelude.classList.add('workspace-enter');
+        }
+      }
+    }
+    if (previousPhase !== phase && phase === 'waiting') {
+      wzSel = null;
+      liveBuffer.clear(); rows = []; render();
+      window.PerfCharts.clearPin();
+      Object.keys(charts).forEach(function(k) { if (charts[k]) charts[k].clear(); });
+      ['fps','frametime','cpu','mem','net','temp'].forEach(function(k) {
+        var stat = wzEl('stat-' + k); if (stat) stat.textContent = '';
+      });
+      appListOld = null; appList = []; currentTarget = null;
+      loadApps(true); loadTarget();
+    }
+    wzEl('tb-select').disabled = targetPending || startPending || (phase !== 'waiting' && phase !== 'running');
+    if (previousPhase !== phase && preparing) transitionWorkspaceSize(previousHeight);
+    workspacePhase = phase;
+    if (!preparing) return;
+    var request = ++preparationRequest;
+    fetch('/api/preparation').then(function(r) { return r.json(); }).then(function(d) {
+      if (request !== preparationRequest || phase !== workspacePhase) return;
+      var message = d.message || '请连接手机。';
+      if (phase === 'initializing') message = '正在读取设备并准备目标选择，请稍候…';
+      if (phase === 'starting') message = '正在启动采集，请稍候…';
+      if (phase === 'saving') message = '正在停止采集并保存报告，请稍候；保存完成后可以开始下一次采集。';
+      if (phase === 'waiting') message = (s.device_info && (s.device_info.market_name || s.device_info.model) || s.device || '手机') + ' · ' + ((s.connection || {}).label || '连接已验证') + (connectionMode === 'wifi' ? ' · 无线已就绪，可拔线' : '');
+      if (preparePending) message = connectionMode === 'wifi' ? '正在准备并验证无线连接，请保留USB线…' : '正在验证手机连接…';
+      document.getElementById('cp-message').textContent = connectionError || message;
+      wzEl('cp-message').classList.toggle('is-error', !!connectionError);
+      var selectedBeforeRefresh = selectedPreparationDevice();
+      var previousSerial = selectedBeforeRefresh && selectedBeforeRefresh.serial;
+      preparationDevices = d.devices || [];
+      preparationGroups = groupPreparationDevices(preparationDevices);
+      preparationAvailable = d.available;
+      preparationBusy = d.busy;
+      var sel = document.getElementById('cp-device');
+      var devices = d.devices || [];
+      var signature = JSON.stringify(devices);
+      if (signature !== prepareSnapshot) {
+        prepareSnapshot = signature;
+        var previous = sel.value;
+        while (sel.firstChild) sel.removeChild(sel.firstChild);
+        var online = preparationGroups.filter(function(g) { return g.connections.some(function(x) { return x.state === 'device'; }); });
+        var placeholder = document.createElement('option'); placeholder.value = '';
+        placeholder.textContent = online.length ? '请选择手机' : '未检测到已授权手机'; sel.appendChild(placeholder);
+        preparationGroups.forEach(function(g) {
+          var x = g.connections[0];
+          var opt = document.createElement('option'); opt.value = g.key;
+          opt.disabled = !g.connections.some(function(c) { return c.state === 'device'; });
+          var sameName = preparationGroups.filter(function(other) { return other.model === g.model; }).length > 1;
+          opt.textContent = g.model + (sameName ? ' · ' + (g.identity || x.serial) : '') +
+            (x.state === 'unauthorized' ? ' · 请允许USB调试' : opt.disabled ? ' · 已离线' : '');
+          opt.title = g.connections.map(function(c) { return c.serial; }).join(' / '); sel.appendChild(opt);
+        });
+        var carried = online.find(function(g) { return g.connections.some(function(c) { return c.serial === previousSerial; }); });
+        if (online.some(function(g) { return g.key === previous; })) sel.value = previous;
+        else if (carried) { sel.value = carried.key; sel.dataset.serial = sel.value; }
+        else if (online.length === 1) sel.value = online[0].key;
+      }
+      var selected = selectedPreparationDevice();
+      var group = selectedPreparationGroup();
+      if (sel.dataset.serial !== sel.value || !connectionMode ||
+          (group && !group.connections.some(function(c) { return c.state === 'device' && c.transport === connectionMode; }) &&
+           !(connectionMode === 'wifi' && selected && selected.transport === 'usb'))) {
+        sel.dataset.serial = sel.value;
+        connectionMode = selected ? selected.transport : '';
+      }
+      sel.disabled = !d.available || d.busy || preparePending;
+      renderConnectionChoices();
+      wzEl('cp-hint').hidden = phase !== 'prepare' || connectionMode !== 'wifi';
+      wzEl('cp-spinner').hidden = !(preparePending || preparationBusy || phase === 'initializing' || phase === 'starting');
+    }).catch(function() {
+      if (request !== preparationRequest) return;
+      preparationAvailable = false; renderConnectionChoices();
+      wzEl('cp-message').textContent = '无法读取连接状态，请检查工具是否仍在运行。';
+    });
+  }
+  document.getElementById('cp-device').onchange = function() {
+    connectionMode = '';
+    var selected = selectedPreparationDevice();
+    connectionMode = selected ? selected.transport : '';
+    wzEl('cp-device').dataset.serial = wzEl('cp-device').value;
+    connectionError = ''; renderConnectionChoices();
+  };
+  wzEl('capture-new').onclick = function() {
+    showPreparation = true;
+    refreshStatus();
+  };
+
   function refreshStatus() {
+    var request = ++statusRequest;
     fetch('/api/status').then(function (r) { return r.json(); }).then(function (s) {
+      if (request !== statusRequest) return;
       // v46：设备显示市场名+型号（有则），否则回退序列号
       var devName = s.device || '-';
       if (s.device_info && typeof s.device_info === 'object') {
@@ -452,6 +934,12 @@
       document.getElementById('st-device').textContent = '设备: ' + devName;
       document.getElementById('st-system').textContent = '系统: ' +
         (s.device_info && s.device_info.system_version || '未获取');
+      var connection = s.connection || (s.device_info && s.device_info.connection) || {};
+      document.getElementById('st-connection').textContent = '连接: ' + (connection.label || '未记录') +
+        (s.device === '断连' ? '（已断开）' : '');
+      var networkNote = document.getElementById('st-network-note');
+      networkNote.textContent = connection.network_note || '';
+      networkNote.hidden = !connection.network_note;
       document.getElementById('st-pid').textContent = '进程: ' + (s.pid || '-');
       document.getElementById('st-run').textContent = '本次: ' + (s.run_id || '-');
       if (s.run_id) lastRunId = s.run_id;   // v48（UI优化 4.4）：记住本次 run，供停止后直达链接
@@ -477,7 +965,7 @@
       // 同步被测目标（采集器启动默认目标 / 其它端切换都会反映到这里）
       var pkg = s.target;
       var pat = s.process_pattern || '';
-      if (pkg && (!currentTarget || currentTarget.package !== pkg || currentTarget.process_pattern !== pat)) {
+      if (!targetPending && pkg && (!currentTarget || currentTarget.package !== pkg || currentTarget.process_pattern !== pat)) {
         currentTarget = { package: pkg, process_pattern: pat };
         updateSelectValue();
       }
@@ -488,8 +976,17 @@
         window.PerfCharts.setCores(cores);
         render();
       }
+      updatePreparation(s);
+      if (s.workspace && !s.running) {
+        pill.textContent = {prepare:'等待连接', initializing:'准备中', waiting:'等待开始', starting:'启动中', saving:'保存中'}[s.phase] || '未采集';
+      }
       updateWizard(s);   // v59：启动向导 / 采集期错配告警
-    }).catch(function () {});
+      document.body.classList.remove('workspace-boot');
+      wzEl('workspace-bootloader').hidden = true;
+      if (s.completed && !showPreparation) { pill.textContent = '已停止'; pill.className = 'st-pill idle'; }
+      if (s.completed && rows.length) wzEl('st-elapsed').textContent = '时长: ' + Math.round((rows[rows.length-1].t_ms || 0) / 1000) + 's';
+      syncSelects();
+    }).catch(function () { wzEl('boot-message').textContent = '连接工作台失败，正在重试…'; });
   }
 
   // ---------------- 被测应用下拉（方案 A 2026-08-20 / v36 就地 diff 更新） ----------------
@@ -504,14 +1001,16 @@
       st.textContent = '⏹ 停止请求已发出…';
       st.className = 'tb-msg pending';
       fetch('/api/stop', { method: 'POST' }).then(function (r) { return r.json(); }).then(function (d) {
-        st.textContent = d && d.ok ? '✔ 已停止' : '✘ ' + ((d && d.error) || '停止失败');
+        st.textContent = d && d.ok ? '✔ 已请求停止，正在收尾保存' : '✘ ' + ((d && d.error) || '停止失败');
         st.className = d && d.ok ? 'tb-msg ok' : 'tb-msg err';
         // v48（UI优化 4.4）：停止成功后追加"查看本次报告 →"直达链接——
-        // 跳到历史看板并用 #name= 自动打开本次记录（配合 report.html 的 hash 定位）
-        if (d && d.ok && lastRunId) {
+        // 新标签打开历史看板并用 #name= 自动打开本次记录（配合 report.html 的 hash 定位）
+        if (d && d.ok && lastRunId && !workspacePhase) {
           var a = document.createElement('a');
           a.href = '/report.html#name=' +
                    encodeURIComponent(lastRunId + '/perfcollect_' + lastRunId + '.jsonl');
+          a.target = '_blank';
+          a.rel = 'noopener';
           a.textContent = ' 查看本次报告 →';
           st.appendChild(a);   // createElement 构建，run_id 不拼 innerHTML
         }
@@ -522,7 +1021,9 @@
   }
 
   function loadTarget() {
+    var request = ++targetRequest;
     fetch('/api/target').then(function (r) { return r.json(); }).then(function (t) {
+      if (request !== targetRequest || targetPending) return;
       if (t && t.package) {
         currentTarget = { package: t.package, process_pattern: t.process_pattern || '' };
         updateSelectValue();
@@ -533,8 +1034,10 @@
   var appListOld = null;   // 上次应用列表快照（就地 diff 用，v36）
 
   function loadApps(force) {
+    if (workspacePhase && workspacePhase !== 'waiting' && workspacePhase !== 'running') return;
     var sel = document.getElementById('tb-select');
     var st = document.getElementById('tb-status');
+    var request = ++appRequest;
     // v36 无感刷新：轮询/解析刷新不再清空下拉重建（这是"左右横跳"主因），
     // 只对变化的选项做就地 diff；仅首次/手动刷新显示提示
     if (appListOld === null || force) {
@@ -543,6 +1046,7 @@
     }
     // force=true（仅刷新按钮传入）→ ?force=1 绕过服务端 60s 包列表缓存
     fetch('/api/device-apps' + (force ? '?force=1' : '')).then(function (r) { return r.json(); }).then(function (d) {
+      if (request !== appRequest) return;
       appList = (d && d.apps) || [];
       rebuildSelect();
       if (d && d.resolving) {
@@ -559,6 +1063,7 @@
         st.className = 'tb-msg warn';
       }
     }).catch(function () {
+      if (request !== appRequest) return;
       if (appListOld === null) rebuildSelect();
       st.textContent = '⚠ 应用列表加载失败';
       st.className = 'tb-msg warn';
@@ -643,6 +1148,7 @@
   }
 
   function updateSelectValue() {
+    queueMicrotask(syncSelects);
     var sel = document.getElementById('tb-select');
     if (!sel || !currentTarget || !currentTarget.package) { sel.value = ''; return; }
     var p = currentTarget.package;
@@ -679,6 +1185,12 @@
   }
 
   function doSwitchTarget(pkg, pat) {
+    if (targetPending || startPending) { updateSelectValue(); return; }
+    targetPending = true;
+    var switchRequest = ++targetRequest;
+    ++candidateRequest;
+    candidatePending = false; wzData = null; wzSel = null; syncStartButton();
+    wzEl('tb-select').disabled = true;
     var st = document.getElementById('tb-status');
     st.textContent = '切换中…';
     st.className = 'tb-msg pending';
@@ -686,6 +1198,7 @@
           '&process_pattern=' + encodeURIComponent(pat || ''), { method: 'POST' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
+        if (switchRequest !== targetRequest) return;
         if (d && d.ok) {
           st.textContent = '✔ ' + (d.message || '已切换');
           st.className = 'tb-msg ok';
@@ -703,9 +1216,16 @@
         }
       })
       .catch(function () {
+        if (switchRequest !== targetRequest) return;
         st.textContent = '✘ 请求失败';
         st.className = 'tb-msg err';
         updateSelectValue();
+      }).finally(function() {
+        if (switchRequest !== targetRequest) return;
+        targetPending = false;
+        wzEl('tb-select').disabled = !!workspacePhase && workspacePhase !== 'waiting' && workspacePhase !== 'running';
+        if (workspacePhase === 'waiting' && !candidatePending) loadCandidates(false);
+        syncStartButton();
       });
   }
 

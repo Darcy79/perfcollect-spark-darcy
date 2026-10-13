@@ -81,7 +81,7 @@ def resolve_capture_timing(cli_interval, cli_duration, config):
 MISMATCH_CHECK_INTERVAL = 10.0
 
 
-def main():
+def main(_prepared_web=None, _prepared_serial=None):
     ap = argparse.ArgumentParser(description="自研 PerfCollect 采集器（第一阶段：FPS/CPU/内存）")
     ap.add_argument("--config", default="config.json", help="配置文件路径")
     ap.add_argument("--package", default=None, help="覆盖目标包名（测其他 App，如 --package com.example.game）")
@@ -89,7 +89,7 @@ def main():
                     help="覆盖进程匹配模式；测原生 App 时传空字符串 --process-pattern \"\"")
     ap.add_argument("--show-foreground", action="store_true",
                     help="仅打印当前前台应用的包名/窗口，然后退出（用于找要测的 App）")
-    ap.add_argument("--serial", default="", help="ADB 设备序列号，默认自动选第一台")
+    ap.add_argument("--serial", default="", help="ADB设备完整标识；仅一个在线连接时自动选择，多连接须指定")
     ap.add_argument("--duration", type=float, default=None,
                     help="采集时长(秒)，覆盖 config.duration_s；0=手动停止")
     ap.add_argument("--interval", type=float, default=None,
@@ -104,7 +104,8 @@ def main():
     ap.add_argument("--sampling-config", default=None, help="独立指标周期 JSON（秒），不改变报告汇总周期")
     ap.add_argument("--output", default="output", help="输出目录")
     ap.add_argument("--web", action="store_true", help="启动实时 Web 看板")
-    ap.add_argument("--port", type=int, default=8080, help="Web 看板端口（默认 8080）")
+    ap.add_argument("--port", type=int, default=None,
+                    help="Web端口；不传时优先8080，占用则递增；显式指定时不换端口")
     ap.add_argument("--no-browser", action="store_true",
                     help="启动看板后不自动打开浏览器（无头/CI 场景用）")
     ap.add_argument("--no-csv", action="store_true",
@@ -112,19 +113,28 @@ def main():
     ap.add_argument("--auto", action="store_true",
                     help="跳过启动向导：自动解析目标进程并立即开始采集（旧行为/脚本用）")
     args = ap.parse_args()
-
-    cfg = load_config(args.config)
+    if args.port is not None and not 0 <= args.port <= 65535:
+        ap.error("端口必须在0~65535之间")
+    # 启动工作台不依赖采集配置、ADB或手机；选择连接后才校验采集参数。
+    if args.web and not args.auto and not args.show_foreground and _prepared_web is None:
+        from workspace import run_workspace
+        return run_workspace(args, lambda web, selected: main(web, selected))
+    args.port = 8080 if args.port is None else args.port
     try:
+        cfg = load_config(args.config)
+        if not isinstance(cfg, dict):
+            raise ValueError("采集配置根节点必须是对象")
         args.interval, args.duration = resolve_capture_timing(args.interval, args.duration, cfg)
         sampler_intervals = load_sampling_intervals(args.sampling_config)
         validate_probe_options(None if args.cpu_probe == "auto" else args.cpu_probe, args.probe_interval)
     except (ValueError, OSError) as e:
+        if _prepared_web is not None:
+            raise ValueError(f"采集配置错误：{e}") from e
         ap.error(str(e))
     package = args.package if args.package is not None else cfg.get("package", "com.tencent.mm")
     process_pattern = args.process_pattern if args.process_pattern is not None \
         else cfg.get("process_pattern", "appbrand")
-    serial = args.serial or cfg.get("serial", "")
-
+    serial = _prepared_serial or args.serial or cfg.get("serial", "")
     outdir = args.output          # 输出根目录（output/）
     os.makedirs(outdir, exist_ok=True)
 
@@ -134,7 +144,11 @@ def main():
     except AdbError as e:
         print(f"[-] {e}")
         sys.exit(1)
-    print(f"[+] 已连接设备: {adb.serial}")
+    from adb_connection import describe_connection
+    connection = describe_connection(adb)
+    print(f"[+] 已连接设备: {adb.serial}（{connection['label']}）")
+    if connection["network_note"]:
+        print("[!] " + connection["network_note"])
 
     # 仅打印当前前台应用（方便确定要测哪个 App），然后退出
     if args.show_foreground:
@@ -156,6 +170,7 @@ def main():
         ap.error(str(error))
     args.cpu_probe = probe_selection["path"]
     sampling_info = sampling_descriptor(sampler_intervals, args.interval)
+    sampling_info["connection"] = connection
     sampling_info["fps_query_mode"] = args.fps_query_mode
     if args.fps_query_mode == "probe":
         from fps_probe import select_fps_probe
@@ -185,6 +200,9 @@ def main():
     def _handler(sig, frame):
         if session.is_stopping:
             # 第二次 Ctrl+C：彻底退出（含 Web 服务）
+            if _prepared_web is not None:
+                _prepared_web.preparation.closed.set()
+                return
             if web:
                 web.stop()
             sys.exit(0)
@@ -198,7 +216,7 @@ def main():
         if not session.is_stopping:
             return False
         print(message)
-        if web:
+        if web and _prepared_web is None:
             web.stop()
         return True
 
@@ -213,19 +231,28 @@ def main():
 
     if args.web:
         from web import WebServer, open_browser_when_ready
-        web = WebServer(port=args.port, output_dir=outdir, adb=adb,
-                        process_pattern=process_pattern)
-        port = web.start()
+        web = _prepared_web or WebServer(port=args.port, output_dir=outdir, adb=adb,
+                                         process_pattern=process_pattern)
+        web.adb = adb
+        web.process_pattern = process_pattern
+        web._abort_label = threading.Event()
+        web._resolving = False
+        web._probe_cache = (0.0, None)
+        port = web.port if _prepared_web is not None else web.start()
+        web.set_status(connection=connection, device=adb.serial)
 
         def _stop_capture():
             """看板 POST /api/stop：请求停止，并中止后台应用名解析。"""
             session.request_stop()
+            web.set_status(phase="saving", running=False)
             web.abort_label_resolve()
             print("[>] 已从看板收到停止采集请求", flush=True)
 
         def _shutdown_all():
             """看板 POST /api/shutdown：停止采集后自然退出程序。"""
             session.request_shutdown()
+            if _prepared_web is not None:
+                web.preparation.closed.set()
             web.abort_label_resolve()
             print("[>] 已从看板收到退出程序请求", flush=True)
 
@@ -273,7 +300,7 @@ def main():
             print("  停止方式  : 本窗口按 Ctrl+C 一次停采集，再按一次退出")
         print("=" * 60)
         print("")
-        if not args.no_browser:
+        if not args.no_browser and _prepared_web is None:
             open_browser_when_ready(port)
 
     chosen_pid, chosen_name = None, None
@@ -300,8 +327,15 @@ def main():
             web.set_status(phase="waiting", candidates=probe_info,
                            device=adb.serial, target=package,
                            process_pattern=process_pattern)
-        print("[*] 网页上选择目标进程 → 点「开始采集」；也可直接在本窗口按回车（用推荐项）"
-              "或输入 pid 后回车；命令行 --auto 可跳过向导")
+        console_start = None
+        if _prepared_web is not None:
+            from workspace import ConsoleStartInput
+            console_start = ConsoleStartInput()
+        if console_start is None or console_start.console is not None:
+            print("[*] 网页上选择目标进程 → 点「开始采集」；也可直接在本窗口按回车（用推荐项）"
+                  "或输入 pid 后回车；命令行 --auto 可跳过向导")
+        else:
+            print("[*] 网页上选择目标进程 → 点「开始采集」；命令行 --auto 可跳过向导")
         # 终端兜底输入（网页界面做好之前的可用路径）：后台线程读一行，主循环轮询
         _in_q = queue.Queue()
 
@@ -311,7 +345,8 @@ def main():
             except Exception:
                 pass
 
-        threading.Thread(target=_stdin_reader, daemon=True, name="stdin-reader").start()
+        if _prepared_web is None:
+            threading.Thread(target=_stdin_reader, daemon=True, name="stdin-reader").start()
         _last_wait_log = 0.0
         while not session.is_stopping:
             req = web.take_start_request() if web else None
@@ -320,10 +355,15 @@ def main():
                 chosen_name = req.get("name")
                 print(f"[>] 收到开始指令（网页）: pid={chosen_pid} {chosen_name}", flush=True)
                 break
-            try:
-                line = (_in_q.get_nowait() or "").strip()
-            except queue.Empty:
-                line = None
+            if console_start is not None:
+                line = console_start.poll()
+                if line is not None:
+                    line = line.strip()
+            else:
+                try:
+                    line = (_in_q.get_nowait() or "").strip()
+                except queue.Empty:
+                    line = None
             if line is not None:
                 if line == "":
                     rec = (probe_info or {}).get("recommended_pid")
@@ -415,6 +455,7 @@ def main():
     # 探测设备信息（2026-08-27）：型号/市场名/平台/CPU/分辨率，一次 shell 往返。
     # 失败项静默 None，不影响采集；写入 status + meta 行供报告展示。
     device_info = probe_device_info(adb)
+    device_info["connection"] = connection
     if device_info.get("model"):
         print(f"[+] 设备: {device_info.get('market_name') or device_info.get('model')}"
               f"（{device_info.get('model')}）")
@@ -426,7 +467,11 @@ def main():
     run_lock = CaptureRunLock(outdir, run_id).acquire()
     # 每次采集新建一个按时间命名的文件夹，内含 jsonl 与 html 报告，避免历史数据混淆
     run_dir = os.path.join(outdir, run_id)
-    os.makedirs(run_dir, exist_ok=True)
+    try:
+        os.makedirs(run_dir, exist_ok=False)
+    except OSError:
+        run_lock.release()
+        raise RuntimeError("无法新建采集目录（可能存在同秒记录）；请稍后重试，已有报告不会被覆盖。")
     out_file = os.path.join(run_dir, f"perfcollect_{run_id}.jsonl")
     jsonl_writer = JsonlWriter(out_file).start()
     # meta 必须先于 Web 回调和采样线程注册，确保任何并发事件都排在首行之后。
@@ -627,7 +672,7 @@ def main():
                     if web:
                         web.set_status(running=False)
                 else:
-                    print("[!] 检测到设备断连！请检查 USB 连接（采集线程持续重试，恢复后自动继续）", flush=True)
+                    print("[!] 检测到设备断连！请检查所选USB或无线ADB连接；不会自动切换设备/连接，长流可能回退查询", flush=True)
                     if web:
                         web.set_status(running=False, device="断连")
             elif health["recovered"] and web:
@@ -684,6 +729,8 @@ def main():
             finally:
                 jsonl_writer.close()
 
+    if web:
+        web.set_status(phase="saving", running=False)
     try:
         sampler_scheduler.raise_if_failed()
         if cpu_backend:
@@ -710,6 +757,8 @@ def main():
 
     if web:
         web.set_status(running=False)
+        if _prepared_web is not None:
+            return
         if session.shutdown_requested:
             # 看板"退出程序"：停止流程已走完（含 HTML 报告生成），直接结束进程
             print("[*] 已收到看板退出请求，程序退出。")

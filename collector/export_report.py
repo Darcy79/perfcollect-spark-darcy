@@ -184,6 +184,7 @@ def report_context(rows, out_path):
     meta = next((row for row in rows
                  if isinstance(row, dict) and row.get("event") == "meta"), {})
     device = meta.get("device") if isinstance(meta.get("device"), dict) else {}
+    connection = device.get("connection") if isinstance(device.get("connection"), dict) else {}
     samples = data_rows(rows)
     times = [row.get("t_ms") for row in samples
              if isinstance(row.get("t_ms"), (int, float))]
@@ -196,6 +197,8 @@ def report_context(rows, out_path):
         ("报告生成", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
         ("机型", model),
         ("系统", device.get("system_version") or "—"),
+        ("连接", connection.get("label") or "—"),
+        ("网络口径", connection.get("network_note") or "整机流量（除lo）"),
         ("被测", process),
         ("采样点", str(len(samples))),
         ("时长", duration),

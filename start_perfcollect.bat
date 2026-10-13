@@ -1,6 +1,6 @@
 @echo off
 setlocal
-title PerfCollect-CN Collector
+title PerfCollect-CN
 cd /d "%~dp0collector"
 
 rem --- locate uv (PATH only; no private-path fallback, portable on any machine) ---
@@ -19,11 +19,12 @@ rem     avoids opening a tab before the service is up / duplicate tabs) ---
 
 echo.
 echo ==================================================
-echo  PerfCollect-CN  : collect + web dashboard
-echo  Live view   : http://localhost:8080
-echo  History     : http://localhost:8080/report.html
+echo  PerfCollect-CN  : prepare, collect and view reports
+echo  Workspace   : prefer port 8080; actual address shown below
+echo  History     : open from the page, no phone needed
 echo  Data saved  : output\<timestamp>\  (jsonl + html)
-echo  Stop        : Ctrl+C twice
+echo  Prepare     : connect phone and choose USB / Wi-Fi in the page
+echo  Stop        : stop in page; Ctrl+C exits when idle
 echo ==================================================
 echo.
 rem --- --with openpyxl: only "export XLSX" needs it; uv fetches it on first run

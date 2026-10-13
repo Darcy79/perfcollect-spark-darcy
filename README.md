@@ -1,6 +1,6 @@
 # 自研 PerfCollect 采集器（FPS / CPU / 内存 / 网络 / 温度）
 
-微信小游戏真机性能采集工具。Windows + USB 安卓真机，ADB 采集，数据本地 JSONL 落盘，**不传云端**。
+微信小游戏真机性能采集工具。Windows + USB / 无线ADB安卓真机采集，数据本地 JSONL 落盘，**不传云端**。
 
 > 📖 **指标详解与使用说明**见同目录 `指标说明.md`（FPS/Jank/帧时间/CPU/PSS 与 PerfDog Memory 区别/网络/温度等逐项说明 + 异常排查 + 测试场景建议）。
 
@@ -32,8 +32,8 @@ cd collector && uv run --no-project python main.py --web
 | 步骤 | 操作 | 成功标志 |
 |---|---|---|
 | 1. 安装 | 拿分发包 zip 解压（或 clone 源码双击 `start_perfcollect.bat`） | — |
-| 2. 连真机 | 手机开 USB 调试连电脑，`adb devices` 看到 `xxx device`；手机打开被测小游戏**保持前台** | 命令行列出设备 |
-| 3. 启动 | 双击 `start_perfcollect.bat`（自动开浏览器看板） | 控制台打印「目标进程 … pid=xxxx」「CPU 核数」「设备: …」 |
+| 2. 启动 | 双击 `start_perfcollect.bat`，无需提前连接手机 | 浏览器打开采集准备页面 |
+| 3. 准备 | 按页面提示连USB并授权，选USB或一键转无线；选择App或微信小游戏实例，点开始采集 | 页面显示「采集中」 |
 | 4. 看板 | 浏览器看实时曲线；顶部下拉可热切换被测应用 | FPS/CPU/内存曲线在动，状态栏"采集中" |
 | 4.1 场景打点 | 采集开始即进入 Label1；需要切换场景时点击一次 `＋ 分段` | 自动进入下一 Label 并换色；点击任意 Label 色块可改名 |
 | 5. 停止 | 看板点「⏹ 停止采集」或控制台 Ctrl+C 一次 | 提示已生成 HTML 报告 |
@@ -41,6 +41,21 @@ cd collector && uv run --no-project python main.py --web
 
 > 报告顶部若出现**告警横幅**（如"疑似采错进程"），先读 `指标说明.md`「十、数据健全性自检」按指引处理，再决定数据是否可用。
 > 换了一台新手机？按 `devices.md` 的「换机验收步骤」先跑 30 秒验证。
+
+## 在看板中准备采集与无线连接
+
+双击现有 `start_perfcollect.bat`，即使没有连接手机也会先打开实时看板；历史报告可直接查看。
+
+1. 用USB连接手机。首次使用打开开发者选项中的USB调试，并在手机上允许电脑调试；页面自动刷新设备状态。仅一台在线手机时自动选中，多台时明确选择。
+2. 选择“USB 有线”并点击“继续选择应用”；或选择“Wi-Fi 无线”，未就绪时点击“准备无线连接”，已有无线连接可直接继续。工具自动获取地址、建立连接并核对设备身份；显示“无线已连接，可以拔掉USB线”后再拔线，无需输入IP、端口或配对码。
+3. 在页面选择普通App或微信小游戏。微信仍需确认候选AppBrand实例；普通App自动解析主进程。点击“开始采集”后才创建采集记录。
+4. 停止后等待保存完成，页面保留当前曲线；点击“准备下一次采集”才返回准备。准备目标时可以点击“更改连接”，采集中不切换连接。
+
+USB引导的无线方式使用传统TCP ADB，**通信不加密，仅用于可信且可互通的局域网**；电脑可以有线接入同一路由器。手机系统或网络策略可能禁止连接；失败时保留USB线，按页面提示操作或继续用USB。开启的TCP调试可能持续到手机重启或显式关闭，停止采集不等于关闭手机的网络调试端口。
+
+**无线ADB通信会计入整机网络流量，不能将曲线当作纯游戏流量。** 看板及新报告标注连接方式；旧报告不推断。断线时不自动切到其他连接，也不能补回断线数据。手机实际开销和稳定性按设备实测验收。
+
+普通命令行自动采集可使用 `--web --auto --serial 完整设备标识`，保留原来的设备先决条件。已用外部ADB建立的无线连接也可在网页选择；本工具的无线入口统一为网页USB引导方式，不提供独立终端菜单。[Android官方无线连接说明](https://developer.android.com/tools/adb#connect-to-a-device-over-wi-fi)。
 
 ## 逐次采样数据
 
@@ -54,7 +69,7 @@ CSV 和 HTML 继续使用原有统计口径。历史看板不会将旁车列成�
 停止记录中的 `unfinished_workers` 非空表示有查询未在停止等待预算内完成。
 分析程序可用 `collector/sample_recording.py` 的 `iter_samples()` 逐条读取。
 
-当前回归基线：Python 424 项、JS 240 断言，前端资源 v93。
+当前回归基线：Python 480 项、JS 287 断言，前端资源 v104。
 
 FPS保持2Hz SurfaceFlinger查询，默认优先使用内置C FPS设备探针；设备不支持、部署失败或流异常时自动回退优化后的专用ADB shell，长连接协议标记使用内置echo；长连接异常再回退逐次查询。`--fps-query-mode persistent`可强制使用长连接，`--fps-query-mode oneshot`可使用原查询方式。CPU默认C探针4Hz，主报告和实时绘图默认约2Hz。
 
@@ -126,8 +141,7 @@ C探针以ADB shell身份执行，Java探针通过app_process运行；不安装A
 
 | 文件 | 作用 |
 |---|---|
-| `start_perfcollect.bat` | **双击启动**采集 + Web 看板（自动定位目录、自动开浏览器） |
-| `start_dashboard.bat` | **双击查看历史报告**（无需手机；服务就绪后自动开页；8080 占用时自动换端口） |
+| `start_perfcollect.bat` | **统一入口**：先打开准备页，可连接手机采集，也可直接新标签查看历史报告；无需提前连接手机，8080占用时自动换端口 |
 
 > 首次运行 bat 会自动用 uv 下载 Python（1 分钟左右），之后即用即开。
 > bat 输出为英文（避免中文在 cmd 乱码），功能与命令启动完全一致。
@@ -237,12 +251,11 @@ uv run --with openpyxl python export_report.py --input output/20260812_164653/pe
 python main.py --interval 0.5     # 采样间隔 0.5 秒
 python main.py --duration 120     # 只采 120 秒自动停
 python main.py --output ../test1  # 输出到其他目录
-python main.py --serial 设备序列号  # 多设备时指定
-python main.py --web              # 启动实时 Web 看板（浏览器查看）
-python main.py --web --port 9000  # 指定看板端口（默认 8080）
+python main.py --serial 完整设备标识  # 多设备或USB/无线并存时指定
+python main.py --web              # 打开准备页；可采集或不连手机查看历史，默认8080占用时自动换端口
+python main.py --web --port 9000  # 固定端口；占用时明确提示，不自动换端口
 python main.py --no-csv          # 本次采集结束不自动生成 CSV
-python dashboard.py               # 只看历史报告；8080 占用时自动选择后续空闲端口
-python dashboard.py --port 9000 --no-browser  # 固定端口、无头启动
+python main.py --web --port 9000 --no-browser  # 固定端口、无头启动工作台
 ```
 
 ## Web 看板（实时曲线 + 历史报告）
@@ -253,7 +266,7 @@ python dashboard.py --port 9000 --no-browser  # 固定端口、无头启动
 python main.py --web
 ```
 
-启动后按提示用浏览器打开：
+无需提前连接手机或确认采集配置；历史查看、改名和导出可直接使用。选择手机连接后才校验采集配置；配置错误会返回准备页提示，不影响历史报告。启动后按提示用浏览器打开以下页面（表中以默认8080为例，端口占用时以启动输出的实际地址为准）：
 
 | 地址 | 内容 |
 |---|---|
@@ -274,7 +287,7 @@ python main.py --web
 {
   "package": "com.tencent.mm",        // 微信包名，一般不用改
   "process_pattern": "appbrand",      // 匹配小游戏子进程（微信:appbrandN）
-  "serial": "",                       // 指定设备序列号，留空自动选第一台
+  "serial": "",                       // 指定设备序列号，留空仅在一个在线连接时自动选择
   "interval_ms": 500,                 // 报告汇总间隔（毫秒），独立指标周期不变
   "duration_s": 0                     // 采集时长（秒），0 = 直到手动停止
 }
@@ -383,6 +396,6 @@ python main.py --package com.example.game --process-pattern "" --web
 | `指标说明.md` | ✅ 现行 V0.8 | 指标口径权威文档：Jank 节奏校准、统计口径、数据健全性自检 |
 | `devices.md` | ✅ 现行 | 真机适配矩阵、机型行为差异、换机验收步骤 |
 
-历史报告的「细粒度采样诊断」可按需读取同目录的 `.samples.jsonl`，查看最近3000个原始CPU样本和100条≥50ms长帧观察。CPU使用主机接收/查询结束时间；长帧只定位到读取窗口结束，SurfaceFlinger时间尚未与主机对齐，不能据此认定CPU峰值与某帧同时发生。该视图独立于报告统计，50ms阈值也独立于Jank判定。扫描上限64MiB，异常或截断会显示提示；此视图在本机历史看板中提供，自包含离线HTML保留原汇总报告。
+同目录的 `.samples.jsonl` 保存独立指标的原始采样，用于离线分析。CPU使用主机接收/查询结束时间；长帧只定位到读取窗口结束，SurfaceFlinger时间尚未与主机对齐，不能据此认定CPU峰值与某帧同时发生。原始采样独立于报告统计，历史看板集中展示主报告曲线及顶部锁定快照。
 
 CPU探针因进程退出而回退查询后，检测到新的PID或进程名会重新启动探针并建立差分基线；同一进程身份的失败保持查询回退。`/api/status` 的 `cpu_backend.active` 表示实际后端：`device_cpu_probe` 为探针，`adb_query` 为回退查询，原因在 `reason` 字段。启用了探针参数不代表设备上已经成功使用探针。

@@ -80,7 +80,7 @@ class Adb:
         out = self._run(["devices"])
         lines = [l for l in out.splitlines() if l.strip() and not l.strip().startswith("List")]
         if not lines:
-            raise AdbError("未检测到已连接的设备，请确认手机已开启 USB 调试并连接。")
+            raise AdbError("未检测到设备，请连接USB并授权，或使用实时看板准备无线连接。")
         if self.serial:
             ok = any(
                 l.split()[0] == self.serial and l.split()[1] == "device"
@@ -90,12 +90,13 @@ class Adb:
             if not ok:
                 raise AdbError(f"设备 {self.serial} 不在线（当前连接: {[l.split()[0] for l in lines]}）")
             return
-        for l in lines:
-            parts = l.split()
-            if len(parts) >= 2 and parts[1] == "device":
-                self.serial = parts[0]
-                self._base = [self.adb, "-s", self.serial]
-                return
+        online = [l.split()[0] for l in lines if len(l.split()) >= 2 and l.split()[1] == "device"]
+        if len(online) > 1:
+            raise AdbError("检测到多个ADB连接，请用 --serial 指定设备，或在实时看板选择：" + ", ".join(online))
+        if online:
+            self.serial = online[0]
+            self._base = [self.adb, "-s", self.serial]
+            return
         raise AdbError("未找到处于 device 状态的设备（有 device 前缀设备但未授权，请在手机上允许 USB 调试）。")
 
     def is_device_alive(self):
