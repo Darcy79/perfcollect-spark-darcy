@@ -8,15 +8,24 @@
 
 ---
 
-## 当前状态（2026-10-13，v136）
+## 当前状态（2026-10-14，v137）
 
 | 项 | 值 |
 |---|---|
 | 前端资源版本 | **v104**（`web/index.html` 3 处、`web/report.html` 5 处 `?v=`） |
-| 测试 | Python **480** 条 + JS **287** 断言（全绿） |
+| 测试 | Python **493** 条 + JS **287** 断言（全绿） |
 | 分发方式 | **zip**（`make_zip.bat` / `tools/make_zip.py` → `share/perfcollect-cn-<版本>-<日期>.zip`）——**已无 exe / 安装包** |
 | 采集环境 | Windows + adb 真机（荣耀 ADT-AN00 Magic3 Pro / OPPO；详见 `devices.md`） |
 | 工具链 | `uv`（Python）+ `bun`（JS 测试）+ `adb` |
+
+---
+
+## v137（2026-10-14 · Codex）—— Android目标装配与只读查询边界
+
+- 首次采集与热切换共用Android目标resolver/采集器工厂；保留先解析PID再构造FPS/CPU/内存/网络的顺序，设备温度跨目标保留。探针选择、回退、worker和输出生命周期保持原流程。
+- Web可注入AndroidQueries，候选进程/应用扫描/应用名设备读取经该边界执行；HTTP仅转发应用查询，保留60秒包缓存及扫描锁、8秒候选缓存、目标校验与后台解析取消。设备发现沿用Preparation的已有manager_factory。
+- 校正指标说明V0.9和README：PSS是否含Swap、RSS异常比较、SF/gfxinfo差异、重度卡顿局限及默认CPU C4Hz/FPS C2Hz/0.5秒报告。只改事实说明和内存模块注释，不改统计、旧格式或前端。
+- 新增13项固定输入/时钟、服务注入、缓存并发与切换晚到样本回归。Python493、JS287通过，前端仍v104；本轮未操作真机。
 
 ---
 

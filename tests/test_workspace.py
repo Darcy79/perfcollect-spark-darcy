@@ -333,8 +333,8 @@ class WorkspaceTests(unittest.TestCase):
                 old_abort.set()
                 return "Old label"
             with patch.object(web, "_load_app_labels", return_value={}), \
-                 patch.object(web, "_find_aapt", return_value=None), \
-                 patch("web.get_apk_label", side_effect=resolve), \
+                 patch.object(web.device_queries, "find_aapt", return_value=None), \
+                 patch.object(web.device_queries, "apk_label", side_effect=resolve), \
                  patch.object(web, "_save_app_label") as save:
                 web._resolve_labels_async("OLD", [("game", "/old.apk")], old_adb, old_abort)
             save.assert_not_called()

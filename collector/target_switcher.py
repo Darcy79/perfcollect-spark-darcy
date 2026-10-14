@@ -7,29 +7,16 @@
 
 import time
 
-from metrics.cpu import CpuCollector
-from metrics.fps import FpsCollector
-from metrics.mem import MemCollector
-from metrics.network import NetworkCollector
-from pidresolver import PidResolver
+from android_backend import create_resolver, create_target_collectors
 from runtime_config import persist_runtime_target
-
-
-def _target_collectors(adb, package, pattern, resolver):
-    return {
-        "fps": FpsCollector(adb, package, pattern),
-        "cpu": CpuCollector(adb, resolver),
-        "mem": MemCollector(adb, resolver, package, min_interval=0),
-        "net": NetworkCollector(adb, resolver),
-    }
 
 
 class TargetSwitcher:
     """执行一次热切换；公开 ``apply`` 可直接注册为 Web 回调。"""
 
     def __init__(self, adb, config, config_path, target_context, mailbox,
-                 writer, web, resolver_factory=PidResolver,
-                 collectors_factory=_target_collectors, clock=time.time,
+                 writer, web, resolver_factory=create_resolver,
+                 collectors_factory=create_target_collectors, clock=time.time,
                  log=print):
         self.adb = adb
         self.config = config

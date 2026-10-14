@@ -43,7 +43,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, quote
 
-from apk_label import get_apk_label
+from android_queries import AndroidQueries
 from timeline_annotations import AnnotationStore
 from run_lock import is_run_active
 from report_view import enhance_served_report
@@ -151,8 +151,6 @@ def open_browser_when_ready(port, path="/", timeout=5.0, opener=None):
         target=_wait_and_open, daemon=True, name="open-browser")
     thread.start()
     return thread
-# 包列表短期缓存（60s TTL）：避免每次打开下拉/刷新都全量 pm list packages
-APPS_CACHE_TTL = 60.0
 # label 解析失败后的重试间隔（秒）：失败也写缓存（fail 标记），
 # 期间不再重复昂贵的 unzip 解析（此前失败不缓存导致每次下拉都重解析）
 LABEL_RETRY_INTERVAL = 24 * 3600.0
@@ -214,7 +212,7 @@ def trim_report_cache(cache, points, max_entries, max_points):
 
 class WebServer:
     def __init__(self, port=8080, output_dir="output", adb=None, switch_cb=None,
-                 process_pattern="appbrand"):
+                 process_pattern="appbrand", device_queries=None):
         self.port = port
         self.process_pattern = process_pattern   # 启动向导探测用（如 appbrand）
         self.output_dir = os.path.abspath(output_dir)
@@ -226,6 +224,7 @@ class WebServer:
                        "outdir": os.path.abspath(output_dir)}
         self.preparation = None     # persistent pre-capture workspace (optional)
         self.adb = adb              # 采集器注入的 adb 实例（离线看板为 None）
+        self.device_queries = AndroidQueries() if device_queries is None else device_queries
         self.switch_cb = switch_cb  # 采集器注入的热切换回调 apply_target(package, pattern)
         self._stop_cb = None        # 采集器注入的停止采集回调（复用 Ctrl+C 停止路径）
         self._shutdown_cb = None    # 采集器注入的彻底退出回调（停止采集 + 结束进程）
@@ -234,10 +233,6 @@ class WebServer:
         self._lock = threading.Lock()
         self._httpd = None
         self._thread = None
-        # 包列表短期缓存（TTL）：{serial: (expire_ts, apps)}
-        self._apps_cache = {}
-        # 扫描锁：缓存过期瞬间并发请求只放行一个 pm list，其余等待复用结果
-        self._apps_scan_lock = threading.Lock()
         # label 缓存文件读写锁：串行化 HTTP 线程读、后台线程写，
         # 避免"读-改-写"竞态覆盖其他设备记录或产生半截 JSON
         self._labels_file_lock = threading.Lock()
@@ -330,8 +325,7 @@ class WebServer:
                    "candidates": [], "layer": {"name": None, "appbrand_index": None}}
         else:
             try:
-                from probe import probe_once
-                res = probe_once(self.adb, pattern)
+                res = self.device_queries.probe_candidates(self.adb, pattern)
             except Exception as e:
                 res = {"ok": False, "error": f"探测失败: {e}", "candidates": [],
                        "layer": {"name": None, "appbrand_index": None}}
@@ -411,6 +405,49 @@ class WebServer:
     # ---------------- 已装应用名（label）解析 ----------------
     # label 解析较慢（逐包 unzip + Python 解析，adb 并发被 server 串行化、并行无效），
     # 采用懒解析：下拉秒回缓存/包名，后台串行补齐，前端轮询刷新。
+    def list_device_apps(self, force=False):
+        """adb 列出已装第三方应用（pm list packages -3 -f），尝试解析应用名（label）。
+
+        label 来源：设备自带 aapt（部分 ROM 有 /system/bin/aapt）→ `aapt dump badging`
+        解析 application-label；解析结果缓存到本地 .app_labels.json（按 serial 分 key）。
+        无 aapt / 解析失败 → label 回退为包名（不影响点选切换）。
+
+        包列表结果带 60s TTL 缓存，避免每次打开下拉/刷新都全量 pm list；
+        force=True（?force=1，刷新按钮用）绕过缓存强制重新扫描。
+        """
+        adb = self.adb
+        if not adb:
+            return {"ok": False, "apps": [], "error": "请先在页面连接手机并选择采集方式"}
+        serial = adb.serial
+        scanned, err = self.device_queries.scan_apps(adb, force=force)
+        if err:
+            return {"ok": False, "apps": [], "error": err}
+        # 浅拷贝条目：缓存里的 dict 是共享引用，本次响应会 pop 掉 apk，
+        # 直接改缓存对象会导致下次请求 KeyError
+        apps = [dict(a) for a in scanned]
+        labels = self._load_app_labels(serial)
+        # 需要解析的包：无缓存，或失败条目已过 24h 重试期。
+        # 后台串行解析（adb 并发被 server 串行化，并行无效），
+        # 本次下拉先显示包名，前端轮询自动刷新。
+        todo = [(a["pkg"], a["apk"]) for a in apps
+                if a["apk"] and self._need_resolve(labels.get(a["pkg"]))]
+        # resolving = 后台是否正在解析（含上次请求已启动的线程）；
+        # 不能只返回"本次是否启动"，否则后台在跑时前端会停止轮询。
+        resolving = False
+        with self._lock:
+            if todo and not self._resolving and self.adb is adb and not self._abort_label.is_set():
+                self._resolving = True
+                threading.Thread(
+                    target=self._resolve_labels_async,
+                    args=(serial, todo, adb, self._abort_label),
+                    daemon=True,
+                ).start()
+            resolving = self._resolving
+        for a in apps:
+            a["label"] = self._label_text(labels.get(a["pkg"])) or a["pkg"]
+            a.pop("apk", None)
+        return {"ok": True, "apps": apps, "resolving": resolving}
+
     def _label_expired(self, ts):
         """失败 label 是否到达重试时间（24h 基础间隔 + 随机抖动）。"""
         return (ts or 0) + LABEL_RETRY_INTERVAL + self._label_retry_jitter <= time.time()
@@ -486,35 +523,6 @@ class WebServer:
         except Exception as e:
             print(f"[!] label 缓存写入失败 {pkg}: {e}", flush=True)
 
-    def _find_aapt(self, adb=None):
-        """探测设备上可用的 aapt/aapt2 路径；找不到返回 None（降级 apk 解析）。"""
-        try:
-            out = (adb or self.adb).shell(["sh", "-c",
-                "ls /system/bin/aapt /system/bin/aapt2 /system/xbin/aapt "
-                "/system/xbin/aapt2 2>/dev/null"])
-        except Exception:
-            return None
-        for line in out.splitlines():
-            if line.strip():
-                return line.strip()
-        return None
-
-    def _aapt_label(self, aapt, apk_path, adb=None):
-        """aapt dump badging 解析 application-label；失败返回 None。"""
-        try:
-            out = (adb or self.adb).shell([aapt, "dump", "badging", apk_path])
-        except Exception:
-            return None
-        for line in out.splitlines():
-            s = line.strip()
-            m = re.search(r"application-label:['\"](.*?)['\"]", s)
-            if m:
-                return m.group(1)
-            m2 = re.search(r"application:\s+label='(.*?)'", s)
-            if m2:
-                return m2.group(1)
-        return None
-
     def _resolve_labels_async(self, serial, todo, adb=None, abort=None):
         """后台串行解析未缓存的应用名，每解析完一个立即持久化。
 
@@ -524,7 +532,7 @@ class WebServer:
         adb = adb or self.adb
         abort = abort or self._abort_label
         labels = self._load_app_labels(serial)
-        aapt = self._find_aapt(adb)
+        aapt = self.device_queries.find_aapt(adb)
         try:
             for pkg, apk in todo:
                 # 中止标志：看板停止采集时终止剩余解析（2026-08-21）
@@ -536,9 +544,9 @@ class WebServer:
                     continue
                 try:
                     if aapt:
-                        lbl = self._aapt_label(aapt, apk, adb) or ""
+                        lbl = self.device_queries.aapt_label(adb, aapt, apk) or ""
                     else:
-                        lbl = get_apk_label(adb, pkg, apk) or ""
+                        lbl = self.device_queries.apk_label(adb, pkg, apk) or ""
                 except Exception as e:
                     print(f"[!] label解析 {pkg} 异常: {e}", flush=True)
                     lbl = ""
@@ -672,7 +680,7 @@ class WebServer:
                     # ?force=1 绕过 60s 包列表缓存强制重新扫描（刷新按钮用）
                     qs = parse_qs(parsed.query)
                     force = (qs.get("force") or [""])[0] == "1"
-                    self._send(200, json.dumps(self._list_device_apps(force), ensure_ascii=False))
+                    self._send(200, json.dumps(server.list_device_apps(force), ensure_ascii=False))
                 elif path == "/api/latest":
                     with server._lock:
                         self._send(200, json.dumps(server.latest, ensure_ascii=False))
@@ -887,85 +895,6 @@ class WebServer:
                     self.close_connection = True
 
             # ---------------- 内部 ----------------
-            def _scan_device_apps(self, serial, adb=None):
-                """执行一次 pm list packages -3 -f 并缓存结果（TTL）。
-
-                并发请求只放行一个扫描，其余等待并复用结果；扫描失败时
-                返回 (apps, error)，apps 为空列表。
-                """
-                now = time.time()
-                cached = server._apps_cache.get(serial)
-                if cached and cached[0] > now:
-                    return cached[1], None
-                with server._apps_scan_lock:
-                    # 拿到锁后再查一次：可能有并发请求刚扫描完
-                    cached = server._apps_cache.get(serial)
-                    if cached and cached[0] > now:
-                        return cached[1], None
-                    try:
-                        out = (adb or server.adb).shell(["pm", "list", "packages", "-3", "-f"])
-                    except Exception as e:
-                        return [], f"列出应用失败: {e}"
-                    apps, seen = [], set()
-                    for line in out.splitlines():
-                        s = line.strip()
-                        if s.startswith("package:"):
-                            rest = s[len("package:"):].strip()
-                            path, _, pkg = rest.rpartition("=")
-                            if not pkg:          # 个别设备不带 =包名，仅路径
-                                pkg, path = path, ""
-                            if pkg and pkg not in seen:
-                                seen.add(pkg)
-                                apps.append({"pkg": pkg, "apk": path})
-                    apps.sort(key=lambda a: a["pkg"])
-                    server._apps_cache[serial] = (time.time() + APPS_CACHE_TTL, apps)
-                    return apps, None
-
-            def _list_device_apps(self, force=False):
-                """adb 列出已装第三方应用（pm list packages -3 -f），尝试解析应用名（label）。
-
-                label 来源：设备自带 aapt（部分 ROM 有 /system/bin/aapt）→ `aapt dump badging`
-                解析 application-label；解析结果缓存到本地 .app_labels.json（按 serial 分 key）。
-                无 aapt / 解析失败 → label 回退为包名（不影响点选切换）。
-
-                包列表结果带 60s TTL 缓存，避免每次打开下拉/刷新都全量 pm list；
-                force=True（?force=1，刷新按钮用）绕过缓存强制重新扫描。
-                """
-                adb = server.adb
-                if not adb:
-                    return {"ok": False, "apps": [], "error": "请先在页面连接手机并选择采集方式"}
-                serial = adb.serial
-                if force:
-                    server._apps_cache.pop(serial, None)
-                scanned, err = self._scan_device_apps(serial, adb)
-                if err:
-                    return {"ok": False, "apps": [], "error": err}
-                # 浅拷贝条目：缓存里的 dict 是共享引用，本次响应会 pop 掉 apk，
-                # 直接改缓存对象会导致下次请求 KeyError
-                apps = [dict(a) for a in scanned]
-                labels = server._load_app_labels(serial)
-                # 需要解析的包：无缓存，或失败条目已过 24h 重试期。
-                # 后台串行解析（adb 并发被 server 串行化，并行无效），
-                # 本次下拉先显示包名，前端轮询自动刷新。
-                todo = [(a["pkg"], a["apk"]) for a in apps
-                        if a["apk"] and server._need_resolve(labels.get(a["pkg"]))]
-                # resolving = 后台是否正在解析（含上次请求已启动的线程）；
-                # 不能只返回"本次是否启动"，否则后台在跑时前端会停止轮询。
-                resolving = False
-                with server._lock:
-                    if todo and not server._resolving and server.adb is adb and not server._abort_label.is_set():
-                        server._resolving = True
-                        threading.Thread(
-                            target=server._resolve_labels_async,
-                            args=(serial, todo, adb, server._abort_label),
-                            daemon=True,
-                        ).start()
-                    resolving = server._resolving
-                for a in apps:
-                    a["label"] = server._label_text(labels.get(a["pkg"])) or a["pkg"]
-                    a.pop("apk", None)
-                return {"ok": True, "apps": apps, "resolving": resolving}
-
             def _switch_target(self, package, pattern):
                 """调用采集器注入的 apply_target 回调执行热切换。"""
                 if not package:

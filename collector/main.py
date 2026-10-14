@@ -20,12 +20,9 @@ import time
 from datetime import datetime
 
 from adb import Adb, AdbError
-from pidresolver import PidResolver
-from metrics.fps import FpsCollector
+from android_backend import create_resolver, create_target_collectors
 from metrics.cpu import CpuCollector
 from cpu_probe import CpuProbeWorker, validate_probe_options, select_cpu_probe
-from metrics.mem import MemCollector
-from metrics.network import NetworkCollector
 from metrics.thermal import ThermalCollector
 from logcat import LogcatMonitor
 from device_info import probe_device_info
@@ -421,26 +418,20 @@ def main(_prepared_web=None, _prepared_serial=None):
 
     # 目标进程：向导模式用用户选定的 pid（固定，不再自动改选）；否则旧行为自动解析
     if chosen_pid:
-        resolver = PidResolver(adb, package, process_pattern,
+        resolver = create_resolver(adb, package, process_pattern,
                                fixed_pid=chosen_pid, fixed_name=chosen_name)
         pid = resolver.resolve()
         print(f"[+] 目标进程（用户指定）: {chosen_name or package} pid={pid}")
     else:
-        resolver = PidResolver(adb, package, process_pattern)
+        resolver = create_resolver(adb, package, process_pattern)
         pid = resolver.resolve()
         if pid:
             print(f"[+] 目标进程: {package}（匹配 {process_pattern or '主进程'}） pid={pid}")
         else:
             print(f"[!] 未找到 {package} 的进程，请确认小游戏已打开且在前台。")
 
-    collectors = {
-        "fps": FpsCollector(adb, package, process_pattern),
-        "cpu": CpuCollector(adb, resolver),
-        # 由线程间隔(2s)控制，不再内部节流
-        "mem": MemCollector(adb, resolver, package, min_interval=0),
-        "net": NetworkCollector(adb, resolver),
-        "therm": ThermalCollector(adb),
-    }
+    collectors = create_target_collectors(adb, package, process_pattern, resolver)
+    collectors["therm"] = ThermalCollector(adb)
     # v75：FPS 0.5s、主循环通常 1s；只存 latest 会覆盖前一窗口。
     # 保留最多 256 个待落盘窗口（约 128s），溢出会显式记录 dropped，不静默丢失。
     metric_mailbox = MetricMailbox({"fps": 256})

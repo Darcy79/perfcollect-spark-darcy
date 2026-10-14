@@ -5,7 +5,9 @@
   1) 优先 `/proc/<pid>/smaps_rollup`（Android 8+，一次 cat 毫秒级，Pss/Rss 同源双值）
   2) 失败回退 `dumpsys meminfo <pid>`，解析 App Summary 段的 TOTAL PSS / TOTAL RSS（同源）
 
-同源保证：PSS 与 RSS 出自同一份数据，物理约束 RSS >= PSS 恒成立。
+同源优先减少时间错位；smaps 的驻留 Pss 与 dumpsys 含 Swap PSS 的 TOTAL PSS
+含义不同。比较驻留范围时需从后者扣除 swap_pss_kb，不能断言原始 RSS >= PSS。
+旧设备缺少 TOTAL RSS 时仍可能回退 /proc/status，保持既有兼容行为。
 此前 PSS 来自 dumpsys、RSS 来自 /proc/status 双源不同步，实测 72.6% 样本出现
 RSS < PSS 倒挂（2026-08-21 修复）。
 

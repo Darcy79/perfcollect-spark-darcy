@@ -11,7 +11,7 @@ import threading
 import time
 import unittest
 import zipfile
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.parse import urlencode
 
 _COLLECTOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "collector")
@@ -288,6 +288,26 @@ class TestWebHttp(unittest.TestCase):
         _, wechat_start = self.request_json("POST", "/api/start")
         self.assertFalse(wechat_start["ok"])
         self.assertIsNone(self.server.take_start_request())
+
+    def test_injected_device_queries_preserve_http_apps_candidates_and_start(self):
+        self.server.adb = Mock(serial="fixture")
+        queries = self.server.device_queries = Mock()
+        queries.scan_apps.return_value = ([{"pkg": "game", "apk": "/game.apk"}], None)
+        queries.probe_candidates.return_value = {
+            "ok": True, "candidates": [{"pid": 42, "name": "game:appbrand0"}],
+            "layer": {"name": "SurfaceView[game]#8", "appbrand_index": 0}}
+        with patch.object(self.server, "_load_app_labels", return_value={"game": "游戏"}):
+            code, apps = self.request_json("GET", "/api/device-apps?force=1")
+        self.assertEqual(code, 200)
+        self.assertEqual(apps, {"ok": True, "apps": [{"pkg": "game", "label": "游戏"}], "resolving": False})
+        queries.scan_apps.assert_called_once_with(self.server.adb, force=True)
+        self.server.set_pending_target("game", "appbrand")
+        _, candidates = self.request_json("GET", "/api/candidates?force=1")
+        self.assertEqual(candidates, queries.probe_candidates.return_value)
+        _, start = self.request_json("POST", "/api/start?pid=42")
+        self.assertTrue(start["ok"])
+        self.assertEqual(self.server.take_start_request()["pid"], 42)
+        self.assertEqual(queries.probe_candidates.call_count, 1)
 
     def test_offline_target_device_apps_candidates_and_start(self):
         self.server.set_status(
